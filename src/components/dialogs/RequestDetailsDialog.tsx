@@ -26,6 +26,7 @@ import {
   getApprovalsForRequest,
   getHistoryForRequest
 } from '@/lib/storage';
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 
 interface RequestDetailsDialogProps {
   request: Request;
@@ -118,6 +119,10 @@ export function RequestDetailsDialog({ request, open, onOpenChange }: RequestDet
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-4xl">
+          {/* Ensure a DialogTitle is present even while loading */}
+          <VisuallyHidden>
+            <DialogTitle>Loading request details…</DialogTitle>
+          </VisuallyHidden>
           <div className="flex items-center justify-center py-8">
             <div className="text-muted-foreground">Loading request details...</div>
           </div>
@@ -159,7 +164,7 @@ export function RequestDetailsDialog({ request, open, onOpenChange }: RequestDet
                   {request.type === 'plant' ? 'Plant Code Details' : 'Company Code Details'}
                 </CardTitle>
                 <CardDescription>
-                  Version {request.version} • Last updated: {new Date(request.updatedAt).toLocaleString()}
+                  Version {details ? (details as any).version : '—'} • Last updated: {new Date(request.updatedAt).toLocaleString()}
                 </CardDescription>
               </CardHeader>
               <CardContent>

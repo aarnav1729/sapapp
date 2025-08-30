@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Upload, Building, Info, AlertTriangle } from 'lucide-react';
+import { Upload, Building, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import {
   Request,
   CompanyCodeDetails,
@@ -38,8 +39,25 @@ export function CompanyCodeForm({
   const [loading, setLoading] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [originalData, setOriginalData] = useState<CompanyCodeDetails | null>(null);
+  const [latestVersion, setLatestVersion] = useState<number | null>(null);
   const { toast } = useToast();
-  
+
+  // memo key for effect dependencies
+  const reqIdKey = useMemo(() => {
+    const anyReq: any = existingRequest || {};
+    return anyReq.requestId || anyReq.id || '';
+  }, [existingRequest]);
+
+  const dialogTitleText = isChangeRequest 
+    ? 'Create Change Request - Company Code'
+    : (existingRequest ? 'Edit Company Code Request' : 'Create Company Code Request');
+
+  const dialogDescriptionText = isChangeRequest
+    ? 'Create a change request for this existing company code. Changes will go through the full approval process.'
+    : (existingRequest 
+        ? 'Update your company code creation request details' 
+        : 'Fill in all required information for company code creation');
+
   // Form data
   const [formData, setFormData] = useState({
     companyCode: '',
@@ -52,50 +70,70 @@ export function CompanyCodeForm({
     nameOfSegment: ''
   });
 
+  // Robust prefill: inline details -> fetch latest; prevent races
   useEffect(() => {
-    if (existingRequest && open) {
-      loadExistingData();
-    } else if (open) {
-      resetForm();
-    }
-  }, [existingRequest, open]);
+    let active = true;
 
-  const loadExistingData = async () => {
-    if (!existingRequest) return;
-    
-    try {
-      const details = await getLatestRequestDetails((existingRequest as any).requestId || (existingRequest as any).id, 'company') as CompanyCodeDetails;
-      if (details) {
-        setFormData({
-          companyCode: details.companyCode || '',
-          nameOfCompanyCode: details.nameOfCompanyCode || '',
-          shareholdingPercentage: details.shareholdingPercentage?.toString() || '',
-          gstCertificate: details.gstCertificate || '',
-          cin: details.cin || '',
-          pan: details.pan || '',
-          segment: details.segment || '',
-          nameOfSegment: details.nameOfSegment || ''
-        });
-        setOriginalData(details);
-      } else if (isChangeRequest && (existingRequest as any).details) {
-        // Load from the request details if available
-        const details = (existingRequest as any).details;
-        setFormData({
-          companyCode: details.companyCode || '',
-          nameOfCompanyCode: details.nameOfCompanyCode || '',
-          shareholdingPercentage: details.shareholdingPercentage?.toString() || '',
-          gstCertificate: details.gstCertificate || '',
-          cin: details.cin || '',
-          pan: details.pan || '',
-          segment: details.segment || '',
-          nameOfSegment: details.nameOfSegment || ''
-        });
-        setOriginalData(details);
+    async function prefill() {
+      if (!open) return;
+
+      // Brand-new create
+      if (!existingRequest && !isChangeRequest) {
+        resetForm();
+        return;
       }
-    } catch (error) {
-      console.error('Error loading existing data:', error);
+
+      if (!existingRequest) return;
+
+      const anyReq: any = existingRequest;
+      const inlineDetails: Partial<CompanyCodeDetails> | null = anyReq.details || null;
+      const currentReqId: string = anyReq.requestId || anyReq.id;
+
+      // 1) Inline details if present
+      if (inlineDetails) {
+        setFormData({
+          companyCode: inlineDetails.companyCode || '',
+          nameOfCompanyCode: inlineDetails.nameOfCompanyCode || '',
+          shareholdingPercentage: (inlineDetails.shareholdingPercentage ?? '').toString(),
+          gstCertificate: inlineDetails.gstCertificate || '',
+          cin: inlineDetails.cin || '',
+          pan: inlineDetails.pan || '',
+          segment: inlineDetails.segment || '',
+          nameOfSegment: inlineDetails.nameOfSegment || ''
+        });
+        setOriginalData(inlineDetails as CompanyCodeDetails);
+        setLatestVersion(typeof (inlineDetails as any)?.version === 'number' ? Number((inlineDetails as any).version) : 0);
+      }
+
+      // 2) Fetch latest from API
+      if (currentReqId) {
+        try {
+          const fetched = await getLatestRequestDetails(currentReqId, 'company') as CompanyCodeDetails | null;
+          if (!active || !fetched) return;
+
+          setFormData({
+            companyCode: fetched.companyCode || '',
+            nameOfCompanyCode: fetched.nameOfCompanyCode || '',
+            shareholdingPercentage: (fetched.shareholdingPercentage ?? '').toString(),
+            gstCertificate: fetched.gstCertificate || '',
+            cin: fetched.cin || '',
+            pan: fetched.pan || '',
+            segment: fetched.segment || '',
+            nameOfSegment: fetched.nameOfSegment || ''
+          });
+          setOriginalData(fetched);
+          setLatestVersion(typeof (fetched as any).version === 'number' ? (fetched as any).version : 0);
+        } catch (e) {
+          // Keep inline details if set; otherwise remain as-is
+          // eslint-disable-next-line no-console
+          console.error('Error loading existing company details:', e);
+        }
+      }
     }
-  };
+
+    prefill();
+    return () => { active = false; };
+  }, [open, reqIdKey, isChangeRequest]);
 
   const resetForm = () => {
     setFormData({
@@ -108,6 +146,8 @@ export function CompanyCodeForm({
       segment: '',
       nameOfSegment: ''
     });
+    setOriginalData(null);
+    setLatestVersion(null);
   };
 
   const handleInputChange = (field: string, value: string) => {
@@ -133,7 +173,7 @@ export function CompanyCodeForm({
 
   const validateForm = () => {
     const requiredFields = Object.keys(formData);
-    const emptyFields = requiredFields.filter(field => !formData[field as keyof typeof formData].toString().trim());
+    const emptyFields = requiredFields.filter(field => !String((formData as any)[field] ?? '').toString().trim());
     
     if (emptyFields.length > 0) {
       toast({
@@ -170,13 +210,19 @@ export function CompanyCodeForm({
 
     try {
       const now = new Date().toISOString();
-      let requestId = (existingRequest as any)?.requestId || (existingRequest as any)?.id || generateRequestId();
-      
-      // For change requests, generate a new request ID
+
+      const anyReq: any = existingRequest || {};
+      const baseId = anyReq.requestId || anyReq.id;
+      let requestId = baseId || generateRequestId();
+
+      // For change requests, use a fresh request id
       if (isChangeRequest) {
         requestId = generateRequestId();
       }
-      
+
+      // Determine next version
+      const nextVersion = isChangeRequest ? 1 : ((latestVersion ?? 0) + 1);
+
       const request: Request = {
         requestId,
         type: 'company',
@@ -185,9 +231,9 @@ export function CompanyCodeForm({
           : `Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`,
         status: 'pending-secretary',
         createdBy: userEmail,
-        createdAt: isChangeRequest ? now : (existingRequest?.createdAt || now),
+        createdAt: isChangeRequest ? now : (anyReq.createdAt || now),
         updatedAt: now,
-        version: isChangeRequest ? 1 : ((existingRequest?.version || 0) + 1)
+        version: nextVersion
       };
 
       const details: CompanyCodeDetails = {
@@ -200,46 +246,61 @@ export function CompanyCodeForm({
         pan: formData.pan,
         segment: formData.segment,
         nameOfSegment: formData.nameOfSegment,
-        version: request.version
+        version: nextVersion
       };
 
       await saveRequest(request);
       await saveCompanyCodeDetails(details);
-      
-      // Track changes if this is a change request
-      let changesSummary = '';
-      if (isChangeRequest && originalData) {
-        const comparison = compareObjects(originalData, formData, 'company');
-        changesSummary = formatChangesForNotification(comparison.changes);
-        
-        await saveHistoryLog({
-          requestId,
-          action: 'create',
-          user: userEmail,
-          timestamp: now,
-          metadata: { 
-            type: 'company', 
-            title: request.title,
-            isChangeRequest: true,
-            originalRequestId: (existingRequest as any)?.requestId || (existingRequest as any)?.id,
-            changes: comparison.changes,
-            changesSummary
-          }
-        });
-      } else {
-        await saveHistoryLog({
-          requestId,
-          action: existingRequest ? 'edit' : 'create',
-          user: userEmail,
-          timestamp: now,
-          metadata: { type: 'company', title: request.title }
-        });
-      }
 
+      // Non-critical history
+      try {
+        if (isChangeRequest && originalData) {
+          const comparison = compareObjects(originalData, formData, 'company');
+          const changesSummary = formatChangesForNotification(comparison.changes);
+          await saveHistoryLog({
+            requestId,
+            action: 'create',
+            user: userEmail,
+            timestamp: now,
+            metadata: { 
+              type: 'company', 
+              title: request.title,
+              isChangeRequest: true,
+              originalRequestId: baseId || null,
+              changes: comparison.changes,
+              changesSummary
+            }
+          });
+        } else {
+          if (originalData) {
+            const comparison = compareObjects(originalData, formData, 'company');
+            const changesSummary = formatChangesForNotification(comparison.changes);
+            await saveHistoryLog({
+              requestId,
+              action: existingRequest ? 'edit' : 'create',
+              user: userEmail,
+              timestamp: now,
+              metadata: { type: 'company', title: request.title, changes: comparison.changes, changesSummary }
+            });
+          } else {
+            await saveHistoryLog({
+              requestId,
+              action: existingRequest ? 'edit' : 'create',
+              user: userEmail,
+              timestamp: now,
+              metadata: { type: 'company', title: request.title }
+            });
+          }
+        }
+      } catch (historyError) {
+        // eslint-disable-next-line no-console
+        console.error('Non-critical: failed to write history log', historyError);
+      }
+      
       toast({
         title: isChangeRequest ? "Change Request Created" : (existingRequest ? "Request Updated" : "Request Created"),
         description: isChangeRequest 
-          ? `Change request created successfully. Changes: ${changesSummary}`
+          ? "Change request created successfully."
           : (existingRequest 
             ? "Your company code request has been updated successfully"
             : "Your company code request has been created and submitted for approval"),
@@ -260,23 +321,40 @@ export function CompanyCodeForm({
     }
   };
 
+  const renderDetectedChanges = () => {
+    if (!originalData) return null;
+    const comparison = compareObjects(originalData, formData, 'company');
+    if (!comparison.hasChanges) return null;
+    return (
+      <div className="mt-2">
+        <p className="font-medium">Changes detected:</p>
+        <div className="text-sm bg-muted p-2 rounded mt-1 whitespace-pre-line">
+          {generateChangesSummary(comparison.changes)}
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => {
+      if (!o) {
+        setShowConfirmation(false);
+      }
+      onOpenChange(o);
+    }}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        {/* Always provide a DialogTitle for a11y; keep it visually hidden */}
+        <VisuallyHidden>
+          <DialogTitle>{dialogTitleText}</DialogTitle>
+        </VisuallyHidden>
+
         <DialogHeader>
-          <DialogTitle>
-            {isChangeRequest 
-              ? 'Create Change Request - Company Code' 
-              : (existingRequest ? 'Edit Company Code Request' : 'Create Company Code Request')
-            }
-          </DialogTitle>
+          {/* Visible heading that mirrors the hidden DialogTitle */}
+          <h2 className="text-lg font-semibold leading-none tracking-tight">
+            {dialogTitleText}
+          </h2>
           <DialogDescription>
-            {isChangeRequest
-              ? 'Create a change request for this existing company code. Changes will go through the full approval process.'
-              : (existingRequest 
-                ? 'Update your company code creation request details' 
-                : 'Fill in all required information for company code creation')
-            }
+            {dialogDescriptionText}
           </DialogDescription>
         </DialogHeader>
 
@@ -288,20 +366,7 @@ export function CompanyCodeForm({
                 ? "Are you sure you want to create this change request? It will go through the full approval process."
                 : "Are you sure you want to confirm these changes? This will create a new version of your request."
               }
-              {isChangeRequest && originalData && (() => {
-                const comparison = compareObjects(originalData, formData, 'company');
-                if (comparison.hasChanges) {
-                  return (
-                    <div className="mt-2">
-                      <p className="font-medium">Changes detected:</p>
-                      <div className="text-sm bg-muted p-2 rounded mt-1">
-                        {generateChangesSummary(comparison.changes)}
-                      </div>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
+              {renderDetectedChanges()}
             </AlertDescription>
             <div className="flex space-x-2 mt-3">
               <Button size="sm" onClick={handleSubmit} disabled={loading}>

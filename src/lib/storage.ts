@@ -1,6 +1,10 @@
-import { openDB, type IDBPDatabase } from 'idb';
+/* app/src/lib/storage.ts
+ * Server-backed storage layer for PEL Workflow (sapapp).
+ * Mirrors the previous IndexedDB API so the UI can switch with minimal changes.
+ * - Uses fetch() to call the Node/MSSQL backend you dropped into /server/server.cjs
+ * - Auth/login is deferred (as requested). Session helpers use localStorage for now.
+ */
 
-// Types
 export interface User {
   email: string;
   role: 'requestor' | 'it' | 'secretary' | 'siva' | 'raghu' | 'manoj' | 'admin';
@@ -11,10 +15,20 @@ export interface Request {
   requestId: string;
   type: 'plant' | 'company';
   title: string;
-  status: 'draft' | 'pending-secretary' | 'pending-siva' | 'pending-raghu' | 'pending-manoj' | 'approved' | 'rejected' | 'sap-updated' | 'completed';
+  status:
+    | 'draft'
+    | 'pending-secretary'
+    | 'pending-siva'
+    | 'pending-raghu'
+    | 'pending-manoj'
+    | 'approved'
+    | 'rejected'
+    | 'sap-updated'
+    | 'completed';
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Not stored on server in Requests—left for UI compatibility if you used it locally */
   version: number;
   isCompleted?: boolean;
   completedAt?: string;
@@ -60,7 +74,8 @@ export interface Attachment {
   attachmentId: string;
   requestId: string;
   fileName: string;
-  fileContent: string; // base64
+  /** Base64 (data URL ok). When uploading, send base64. When viewing, use getAttachmentDataUrl(). */
+  fileContent: string;
   fileType: string;
   version: number;
   title: string;
@@ -92,374 +107,506 @@ export interface Session {
   expiresAt: string;
 }
 
-let dbInstance: IDBPDatabase | null = null;
+/* ================================
+   API configuration & utilities
+   ================================ */
 
-export async function initDB() {
-  if (dbInstance) return dbInstance;
+const API_BASE: string =
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as any)?.env?.VITE_API_BASE_URL) ||
+  // If you're serving FE and BE on different ports locally:
+  (window?.location?.hostname === 'localhost'
+    ? 'https://localhost:14443'
+    : window.location.origin.replace(/\/+$/, ''));
 
-  dbInstance = await openDB('PELWorkflow', 1, {
-    upgrade(db) {
-      // Users store
-      const userStore = db.createObjectStore('users', { keyPath: 'email' });
-      userStore.createIndex('role', 'role');
+type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error: string; detail?: any };
 
-      // Requests store
-      const requestStore = db.createObjectStore('requests', { keyPath: 'requestId' });
-      requestStore.createIndex('status', 'status');
-      requestStore.createIndex('createdBy', 'createdBy');
-      requestStore.createIndex('type', 'type');
-      requestStore.createIndex('statusType', ['status', 'type']);
-
-      // Plant code details
-      const plantStore = db.createObjectStore('plantCodeDetails', { keyPath: ['requestId', 'version'] });
-      plantStore.createIndex('requestId', 'requestId');
-
-      // Company code details
-      const companyStore = db.createObjectStore('companyCodeDetails', { keyPath: ['requestId', 'version'] });
-      companyStore.createIndex('requestId', 'requestId');
-
-      // Attachments
-      const attachmentStore = db.createObjectStore('attachments', { keyPath: 'attachmentId' });
-      attachmentStore.createIndex('requestId', 'requestId');
-
-      // Approvals
-      const approvalStore = db.createObjectStore('approvals', { keyPath: ['requestId', 'approverEmail'] });
-      approvalStore.createIndex('requestId', 'requestId');
-
-      // History logs
-      const historyStore = db.createObjectStore('historyLogs', { keyPath: ['requestId', 'timestamp'] });
-      historyStore.createIndex('requestId', 'requestId');
-
-      // Sessions
-      db.createObjectStore('sessions', { keyPath: 'email' });
-    },
+async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    credentials: 'omit',
+    ...init,
   });
 
-  // Initialize default users
-  await initializeDefaultUsers();
-  
-  return dbInstance;
-}
+  // Binary streams (attachments)
+  const ct = resp.headers.get('content-type') || '';
+  const isJson = ct.includes('application/json');
 
-async function initializeDefaultUsers() {
-  const db = await initDB();
-  const tx = db.transaction('users', 'readwrite');
-  
-  const defaultUsers: User[] = [
-    { email: 'it@pel.com', role: 'it', createdAt: new Date().toISOString() },
-    { email: 'sec@pel.com', role: 'secretary', createdAt: new Date().toISOString() },
-    { email: 'siva@pel.com', role: 'siva', createdAt: new Date().toISOString() },
-    { email: 'raghu@pel.com', role: 'raghu', createdAt: new Date().toISOString() },
-    { email: 'manoj@pel.com', role: 'manoj', createdAt: new Date().toISOString() },
-    { email: 'aarnav@pel.com', role: 'admin', createdAt: new Date().toISOString() },
-  ];
-
-  for (const user of defaultUsers) {
-    const exists = await tx.store.get(user.email);
-    if (!exists) {
-      await tx.store.add(user);
-    }
+  if (!resp.ok) {
+    const body = isJson ? await resp.json().catch(() => ({})) : {};
+    const msg =
+      (body && (body.error || body.message)) ||
+      `HTTP ${resp.status} ${resp.statusText}`;
+    throw new Error(`${msg}`);
   }
-  
-  await tx.done;
+
+  if (!isJson) {
+    // @ts-expect-error caller will handle blob/arrayBuffer; used in getAttachmentDataUrl
+    return resp as any;
+  }
+
+  const body = (await resp.json()) as ApiEnvelope<T>;
+  if (!('ok' in body) || body.ok !== true) {
+    throw new Error(
+      (body as any)?.error || 'Unknown API error (unexpected envelope)'
+    );
+  }
+  return body.data;
 }
 
-export async function getUserRole(email: string): Promise<string> {
-  const db = await initDB();
-  const user = await db.get('users', email);
-  return user?.role || 'requestor';
+function sortByDateDesc<T extends Record<string, any>>(arr: T[], key: string) {
+  return [...arr].sort(
+    (a, b) => new Date(b[key]).getTime() - new Date(a[key]).getTime()
+  );
 }
+
+function toISO(d?: string | number | Date | null) {
+  return d ? new Date(d).toISOString() : new Date().toISOString();
+}
+
+/* ================================
+   initDB shim (kept for compatibility)
+   ================================ */
+
+let _initted = false;
+
+/** 
+ * Previous implementation returned an IDB instance; now we just ping the API.
+ * Kept to avoid touching the rest of the app code.
+ */
+export async function initDB(): Promise<null> {
+  if (_initted) return null;
+  try {
+    await http<{ status: string }>('/health');
+  } catch (e) {
+    // Don’t throw here; allow UI to render while server boots
+    // eslint-disable-next-line no-console
+    console.error('Health check failed:', e);
+  }
+  _initted = true;
+  return null;
+}
+
+/* ================================
+   Session (temporary localStorage until login is implemented)
+   ================================ */
+
+const SESSION_KEY = 'pel_session';
 
 export async function saveSession(session: Session) {
-  const db = await initDB();
-  await db.put('sessions', session);
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
 
 export async function getSession(): Promise<Session | null> {
-  const db = await initDB();
-  const sessions = await db.getAll('sessions');
-  if (sessions.length === 0) return null;
-  
-  const session = sessions[0];
-  if (new Date(session.expiresAt) < new Date()) {
-    await db.delete('sessions', session.email);
+  const raw = localStorage.getItem(SESSION_KEY);
+  if (!raw) return null;
+  try {
+    const s = JSON.parse(raw) as Session;
+    if (new Date(s.expiresAt) < new Date()) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return s;
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
     return null;
   }
-  
-  return session;
 }
 
 export async function clearSession() {
-  const db = await initDB();
-  await db.clear('sessions');
+  localStorage.removeItem(SESSION_KEY);
 }
+
+/* ================================
+   Users
+   ================================ */
+
+export async function getUserRole(email: string): Promise<string> {
+  await initDB();
+  try {
+    const user = await http<User | null>(`/api/users/${encodeURIComponent(email)}`);
+    return user?.role || 'requestor';
+  } catch (e) {
+    // fallback to requestor if not found/failed
+    return 'requestor';
+  }
+}
+
+export const getAllUsers = async (): Promise<User[]> => {
+  await initDB();
+  const users = await http<User[]>('/api/users');
+  return users;
+};
+
+export const createUser = async (email: string, role: string): Promise<void> => {
+  await initDB();
+  const payload = { email, role };
+  await http<User>('/api/users', { method: 'POST', body: JSON.stringify(payload) });
+};
+
+export const getUserByEmail = async (email: string): Promise<User | null> => {
+  await initDB();
+  const user = await http<User | null>(`/api/users/${encodeURIComponent(email)}`);
+  return user || null;
+};
+
+export const deleteUser = async (email: string): Promise<void> => {
+  await initDB();
+  await http(`/api/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
+};
+
+/* ================================
+   Requests
+   ================================ */
 
 export async function saveRequest(request: Request) {
-  const db = await initDB();
-  await db.put('requests', request);
+  await initDB();
+  // server generates/updates updatedAt; keep compatibility
+  await http<{ requestId: string }>('/api/requests', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestId: request.requestId,
+      type: request.type,
+      title: request.title,
+      status: request.status,
+      createdBy: request.createdBy,
+      createdAt: request.createdAt || toISO(),
+      updatedAt: request.updatedAt || toISO(),
+    }),
+  });
 }
 
+/**
+ * Updated to include inline details by sourcing from /api/requests-with-details.
+ * This makes edit dialogs prefill immediately (and they still fetch latest in-dialog).
+ */
 export async function getRequestsByUser(email: string): Promise<Request[]> {
-  const db = await initDB();
-  const requests = await db.getAllFromIndex('requests', 'createdBy', email);
-  return requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  await initDB();
+  type Row = Request & { details: any | null; approvalsCount: number };
+  const rows = await http<Row[]>('/api/requests-with-details');
+  const filtered = rows.filter(
+    (r) => (r.createdBy || '').toLowerCase() === email.toLowerCase()
+  );
+  // Keep existing return shape the rest of the app expects.
+  return sortByDateDesc(filtered, 'createdAt') as unknown as Request[];
 }
 
 export async function getAllRequests(): Promise<Request[]> {
-  const db = await initDB();
-  const requests = await db.getAll('requests');
-  return requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  await initDB();
+  const data = await http<Request[]>('/api/requests');
+  return sortByDateDesc(data, 'createdAt');
 }
 
 export async function getPendingRequestsForRole(role: string): Promise<Request[]> {
-  const db = await initDB();
-  const statusMap: Record<string, string> = {
+  await initDB();
+  const statusMap: Record<string, Request['status']> = {
     secretary: 'pending-secretary',
     siva: 'pending-siva',
     raghu: 'pending-raghu',
     manoj: 'pending-manoj',
   };
-  
   const status = statusMap[role];
   if (!status) return [];
-  
-  const requests = await db.getAllFromIndex('requests', 'status', status);
-  return requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const q = new URLSearchParams({ status });
+  const data = await http<Request[]>(`/api/requests?${q.toString()}`);
+  return sortByDateDesc(data, 'createdAt');
 }
 
+export const updateRequestStatus = async (
+  requestId: string,
+  status: Request['status']
+): Promise<void> => {
+  await initDB();
+  await http(`/api/requests/${encodeURIComponent(requestId)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+};
+
+/* ================================
+   Versioned details
+   ================================ */
+
 export async function savePlantCodeDetails(details: PlantCodeDetails) {
-  const db = await initDB();
-  await db.put('plantCodeDetails', details);
+  await initDB();
+  await http('/api/plant-details', {
+    method: 'POST',
+    body: JSON.stringify(details),
+  });
 }
 
 export async function saveCompanyCodeDetails(details: CompanyCodeDetails) {
-  const db = await initDB();
-  await db.put('companyCodeDetails', details);
+  await initDB();
+  await http('/api/company-details', {
+    method: 'POST',
+    body: JSON.stringify(details),
+  });
 }
 
-export async function getLatestRequestDetails(requestId: string, type: 'plant' | 'company') {
-  const db = await initDB();
-  const store = type === 'plant' ? 'plantCodeDetails' : 'companyCodeDetails';
-  const allVersions = await db.getAllFromIndex(store, 'requestId', requestId);
-  return allVersions.sort((a, b) => b.version - a.version)[0] || null;
+export async function getLatestRequestDetails(
+  requestId: string,
+  type: 'plant' | 'company'
+) {
+  await initDB();
+  if (type === 'plant') {
+    return await http<PlantCodeDetails | null>(
+      `/api/plant-details/${encodeURIComponent(requestId)}/latest`
+    );
+  } else {
+    return await http<CompanyCodeDetails | null>(
+      `/api/company-details/${encodeURIComponent(requestId)}/latest`
+    );
+  }
 }
+
+/* ================================
+   Approvals & History
+   ================================ */
 
 export async function saveApproval(approval: Approval) {
-  const db = await initDB();
-  await db.put('approvals', approval);
+  await initDB();
+  await http('/api/approvals', {
+    method: 'POST',
+    body: JSON.stringify(approval),
+  });
 }
 
-export async function getApprovalsForRequest(requestId: string): Promise<Approval[]> {
-  const db = await initDB();
-  const approvals = await db.getAllFromIndex('approvals', 'requestId', requestId);
-  return approvals.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-}
-
-export async function saveHistoryLog(log: HistoryLog) {
-  const db = await initDB();
-  await db.put('historyLogs', log);
-}
-
-export async function getHistoryForRequest(requestId: string): Promise<HistoryLog[]> {
-  const db = await initDB();
-  const history = await db.getAllFromIndex('historyLogs', 'requestId', requestId);
-  return history.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-}
-
-export function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-export function generateRequestId(): string {
-  return `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-}
-
-export const getRequestsWithDetails = async (): Promise<any[]> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['requests', 'plantCodeDetails', 'companyCodeDetails', 'approvals'], 'readonly');
-    const requests = await tx.objectStore('requests').getAll();
-    
-    const requestsWithDetails = await Promise.all(
-      requests.map(async (request) => {
-        let details = null;
-        if (request.type === 'plant') {
-          const plantDetails = await tx.objectStore('plantCodeDetails').getAll();
-          details = plantDetails.filter(d => d.requestId === request.requestId).sort((a, b) => b.version - a.version)[0];
-        } else {
-          const companyDetails = await tx.objectStore('companyCodeDetails').getAll();
-          details = companyDetails.filter(d => d.requestId === request.requestId).sort((a, b) => b.version - a.version)[0];
-        }
-        
-        const approvals = await tx.objectStore('approvals').getAll();
-        const requestApprovals = approvals.filter(approval => approval.requestId === request.requestId);
-        
-        return {
-          id: request.requestId,
-          type: request.type,
-          status: request.status,
-          createdBy: request.createdBy,
-          createdAt: request.createdAt,
-          updatedAt: request.updatedAt,
-          details: details || {},
-          approvals: requestApprovals
-        };
-      })
-    );
-    
-    return requestsWithDetails;
-  } catch (error) {
-    console.error('Failed to get requests with details:', error);
-    throw error;
-  }
-};
-
-export const getAllUsers = async (): Promise<any[]> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['users'], 'readonly');
-    const users = await tx.objectStore('users').getAll();
-    return users;
-  } catch (error) {
-    console.error('Failed to get all users:', error);
-    throw error;
-  }
-};
-
-export const createUser = async (email: string, role: string): Promise<void> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['users'], 'readwrite');
-    const user = {
-      email,
-      role,
-      createdAt: new Date().toISOString()
-    };
-    await tx.objectStore('users').add(user);
-    await tx.done;
-  } catch (error) {
-    console.error('Failed to create user:', error);
-    throw error;
-  }
-};
-
-export const getUserByEmail = async (email: string): Promise<any | null> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['users'], 'readonly');
-    const user = await tx.objectStore('users').get(email);
-    return user || null;
-  } catch (error) {
-    console.error('Failed to get user by email:', error);
-    throw error;
-  }
-};
-
-export const deleteUser = async (email: string): Promise<void> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['users'], 'readwrite');
-    await tx.objectStore('users').delete(email);
-    await tx.done;
-  } catch (error) {
-    console.error('Failed to delete user:', error);
-    throw error;
-  }
-};
-
-export const markRequestCompleted = async (requestId: string, completedBy: string): Promise<void> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['requests'], 'readwrite');
-    const request = await tx.objectStore('requests').get(requestId);
-    
-    if (request) {
-      const completedAt = new Date().toISOString();
-      const createdDate = new Date(request.createdAt);
-      const completedDate = new Date(completedAt);
-      const turnaroundTime = Math.ceil((completedDate.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
-      
-      request.status = 'completed';
-      request.isCompleted = true;
-      request.completedAt = completedAt;
-      request.turnaroundTime = turnaroundTime;
-      request.updatedAt = completedAt;
-      
-      await tx.objectStore('requests').put(request);
-      
-      // Log the completion
-      await saveHistoryLog({
-        requestId,
-        action: 'update-sap',
-        user: completedBy,
-        timestamp: completedAt,
-        metadata: { turnaroundTime, completedBy }
-      });
-    }
-    
-    await tx.done;
-  } catch (error) {
-    console.error('Failed to mark request as completed:', error);
-    throw error;
-  }
-};
-
-export const getCompletedRequests = async (): Promise<Request[]> => {
-  try {
-    const db = await initDB();
-    const requests = await db.getAllFromIndex('requests', 'status', 'completed');
-    return requests.sort((a, b) => new Date(b.completedAt || b.updatedAt).getTime() - new Date(a.completedAt || a.updatedAt).getTime());
-  } catch (error) {
-    console.error('Failed to get completed requests:', error);
-    throw error;
-  }
-};
-
-export const addApproval = async (requestId: string, approverEmail: string, role: string, decision: string, comment: string, attachmentId?: string): Promise<void> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['approvals', 'historyLogs'], 'readwrite');
-    const approval = {
+export const addApproval = async (
+  requestId: string,
+  approverEmail: string,
+  role: string,
+  decision: 'approve' | 'reject',
+  comment: string,
+  attachmentId?: string
+): Promise<void> => {
+  await initDB();
+  const timestamp = toISO();
+  await http('/api/approvals', {
+    method: 'POST',
+    body: JSON.stringify({
       requestId,
       approverEmail,
       role,
       decision,
       comment,
       attachmentId,
-      timestamp: new Date().toISOString()
-    };
-    await tx.objectStore('approvals').put(approval);
-    
-    // Log the approval action
-    const historyLog = {
+      timestamp,
+    }),
+  });
+
+  // Also log the action (for analytics & audit)
+  await http('/api/history', {
+    method: 'POST',
+    body: JSON.stringify({
       requestId,
-      action: decision === 'approve' ? 'approve' : (decision === 'reject' ? 'reject' : 'update-sap'),
+      action: decision === 'approve' ? 'approve' : 'reject',
       user: approverEmail,
-      timestamp: approval.timestamp,
-      metadata: { comment, role, decision }
-    };
-    await tx.objectStore('historyLogs').put(historyLog);
-    
-    await tx.done;
-  } catch (error) {
-    console.error('Failed to add approval:', error);
-    throw error;
+      timestamp,
+      metadata: { comment, role, decision },
+    }),
+  });
+};
+
+export async function getApprovalsForRequest(requestId: string): Promise<Approval[]> {
+  await initDB();
+  const data = await http<Approval[]>(
+    `/api/approvals/${encodeURIComponent(requestId)}`
+  );
+  return [...data].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+}
+
+export async function saveHistoryLog(log: HistoryLog) {
+  await initDB();
+  await http('/api/history', {
+    method: 'POST',
+    body: JSON.stringify(log),
+  });
+}
+
+export async function getHistoryForRequest(requestId: string): Promise<HistoryLog[]> {
+  await initDB();
+  const data = await http<HistoryLog[]>(
+    `/api/history/${encodeURIComponent(requestId)}`
+  );
+  return sortByDateDesc(data, 'timestamp');
+}
+
+/* ================================
+   Attachments
+   ================================ */
+
+export const uploadAttachment = async (args: {
+  requestId: string;
+  fileName: string;
+  fileType: string;
+  fileContent: string; // base64 or data URL
+  version: number;
+  title?: string;
+  uploadedBy: string;
+}): Promise<{ attachmentId: string }> => {
+  await initDB();
+  const res = await http<{ attachmentId: string }>('/api/attachments', {
+    method: 'POST',
+    body: JSON.stringify(args),
+  });
+  return res;
+};
+
+export const getAttachmentsForRequest = async (
+  requestId: string
+): Promise<Omit<Attachment, 'fileContent'>[]> => {
+  await initDB();
+  const data = await http<
+    Array<{
+      attachmentId: string;
+      requestId: string;
+      fileName: string;
+      fileType: string;
+      version: number;
+      title: string | null;
+      uploadedBy: string;
+      uploadedAt: string;
+    }>
+  >(`/api/attachments/${encodeURIComponent(requestId)}`);
+  // Normalize to Attachment minus fileContent
+  return data.map((d) => ({
+    attachmentId: d.attachmentId,
+    requestId: d.requestId,
+    fileName: d.fileName,
+    fileType: d.fileType,
+    version: d.version,
+    title: d.title || '',
+    uploadedBy: d.uploadedBy,
+    uploadedAt: d.uploadedAt,
+  }));
+};
+
+/** Fetches attachment binary and returns a data URL you can feed into your DocumentViewer. */
+export const getAttachmentDataUrl = async (
+  attachmentId: string
+): Promise<string> => {
+  await initDB();
+  const resp = await fetch(
+    `${API_BASE}/api/attachment/${encodeURIComponent(attachmentId)}`,
+    { method: 'GET' }
+  );
+  if (!resp.ok) throw new Error(`Failed to fetch attachment ${attachmentId}`);
+  const blob = await resp.blob();
+  return await blobToDataUrl(blob);
+};
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read blob'));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/* ================================
+   Aggregation & analytics
+   ================================ */
+
+export const getRequestsWithDetails = async (): Promise<
+  Array<{
+    id: string;
+    type: Request['type'];
+    status: Request['status'];
+    createdBy: string;
+    createdAt: string;
+    updatedAt: string;
+    details: any;
+    approvals: any[]; // you can enrich with getApprovalsForRequest if needed
+  }>
+> => {
+  await initDB();
+  // Server returns joined Requests + latest details + approvalsCount
+  const rows = await http<
+    Array<
+      Request & {
+        details: any | null;
+        approvalsCount: number;
+      }
+    >
+  >('/api/requests-with-details');
+
+  // Conform to the shape your dashboards expect (id instead of requestId, include approvals array empty by default)
+  return rows.map((r) => ({
+    id: r.requestId,
+    type: r.type,
+    status: r.status,
+    createdBy: r.createdBy,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    details: r.details || {},
+    approvals: [], // fetch separately if/when needed for a given request
+  }));
+};
+
+/* ================================
+   Completion utilities (compat)
+   ================================ */
+
+export const markRequestCompleted = async (
+  requestId: string,
+  completedBy: string
+): Promise<void> => {
+  await initDB();
+  // Get the request to compute turnaround
+  let req: Request | null = null;
+  try {
+    req = await http<Request>(`/api/requests/${encodeURIComponent(requestId)}`);
+  } catch {
+    // ignore
+  }
+
+  const completedAt = toISO();
+  await updateRequestStatus(requestId, 'completed');
+
+  if (req?.createdAt) {
+    const createdDate = new Date(req.createdAt);
+    const completedDate = new Date(completedAt);
+    const turnaroundTime = Math.ceil(
+      (completedDate.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24)
+    );
+
+    // Record in history
+    await saveHistoryLog({
+      requestId,
+      action: 'update-sap',
+      user: completedBy,
+      timestamp: completedAt,
+      metadata: { turnaroundTime, completedBy },
+    });
   }
 };
 
-export const updateRequestStatus = async (requestId: string, status: string): Promise<void> => {
-  try {
-    const db = await initDB();
-    const tx = db.transaction(['requests'], 'readwrite');
-    const request = await tx.objectStore('requests').get(requestId);
-    if (request) {
-      request.status = status;
-      request.updatedAt = new Date().toISOString();
-      await tx.objectStore('requests').put(request);
-    }
-    await tx.done;
-  } catch (error) {
-    console.error('Failed to update request status:', error);
-    throw error;
-  }
+export const getCompletedRequests = async (): Promise<Request[]> => {
+  await initDB();
+  const q = new URLSearchParams({ status: 'completed' });
+  const data = await http<Request[]>(`/api/requests?${q.toString()}`);
+  // If server doesn’t compute completedAt, use updatedAt
+  return [...data].sort(
+    (a, b) =>
+      new Date(b.completedAt || b.updatedAt).getTime() -
+      new Date(a.completedAt || a.updatedAt).getTime()
+  );
 };
+
+/* ================================
+   Generators (kept from prior)
+   ================================ */
+
+export function generateOTP(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+export function generateRequestId(): string {
+  return `REQ-${Date.now()}-${Math.random()
+    .toString(36)
+    .substring(2, 8)
+    .toUpperCase()}`;
+}

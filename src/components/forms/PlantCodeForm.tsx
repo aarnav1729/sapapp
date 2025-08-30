@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,8 +6,9 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Upload, FileText, Info, AlertTriangle } from 'lucide-react';
+import { Upload, FileText, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import {
   Request,
   PlantCodeDetails,
@@ -39,8 +40,26 @@ export function PlantCodeForm({
   const [loading, setLoading] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [originalData, setOriginalData] = useState<PlantCodeDetails | null>(null);
+  const [latestVersion, setLatestVersion] = useState<number | null>(null);
   const { toast } = useToast();
-  
+
+  // memo key for effect dependencies (stable across prop shuffles)
+  const reqIdKey = useMemo(() => {
+    const anyReq: any = existingRequest || {};
+    return anyReq.requestId || anyReq.id || '';
+  }, [existingRequest]);
+
+  // Compute text once so hidden title and visible heading stay in sync
+  const dialogTitleText = isChangeRequest 
+    ? 'Create Change Request - Plant Code'
+    : (existingRequest ? 'Edit Plant Code Request' : 'Create Plant Code Request');
+
+  const dialogDescriptionText = isChangeRequest
+    ? 'Create a change request for this existing plant code. Changes will go through the full approval process.'
+    : (existingRequest 
+        ? 'Update your plant code creation request details' 
+        : 'Fill in all required information for plant code creation');
+
   // Form data
   const [formData, setFormData] = useState({
     companyCode: '',
@@ -62,70 +81,94 @@ export function PlantCodeForm({
     storageLocationDescription: ''
   });
 
+  // Robust prefill: prefer inline details, else fetch; avoid races
   useEffect(() => {
-    if (existingRequest && open) {
-      loadExistingData();
-    } else if (open) {
-      resetForm();
-    }
-  }, [existingRequest, open]);
+    let active = true;
 
-  const loadExistingData = async () => {
-    if (!existingRequest) return;
-    
-    try {
-      const details = await getLatestRequestDetails((existingRequest as any).requestId || (existingRequest as any).id, 'plant') as PlantCodeDetails;
-      if (details) {
-        const formDataObj = {
-          companyCode: details.companyCode || '',
-          gstCertificate: details.gstCertificate || '',
-          plantCode: details.plantCode || '',
-          nameOfPlant: details.nameOfPlant || '',
-          addressOfPlant: details.addressOfPlant || '',
-          purchaseOrganization: details.purchaseOrganization || '',
-          nameOfPurchaseOrganization: details.nameOfPurchaseOrganization || '',
-          salesOrganization: details.salesOrganization || '',
-          nameOfSalesOrganization: details.nameOfSalesOrganization || '',
-          profitCenter: details.profitCenter || '',
-          nameOfProfitCenter: details.nameOfProfitCenter || '',
-          costCenters: details.costCenters || '',
-          nameOfCostCenters: details.nameOfCostCenters || '',
-          projectCode: details.projectCode || '',
-          projectCodeDescription: details.projectCodeDescription || '',
-          storageLocationCode: details.storageLocationCode || '',
-          storageLocationDescription: details.storageLocationDescription || ''
-        };
-        setFormData(formDataObj);
-        setOriginalData(details);
-      } else if (isChangeRequest && (existingRequest as any).details) {
-        // Load from the request details if available
-        const details = (existingRequest as any).details;
-        const formDataObj = {
-          companyCode: details.companyCode || '',
-          gstCertificate: details.gstCertificate || '',
-          plantCode: details.plantCode || '',
-          nameOfPlant: details.nameOfPlant || '',
-          addressOfPlant: details.addressOfPlant || '',
-          purchaseOrganization: details.purchaseOrganization || '',
-          nameOfPurchaseOrganization: details.nameOfPurchaseOrganization || '',
-          salesOrganization: details.salesOrganization || '',
-          nameOfSalesOrganization: details.nameOfSalesOrganization || '',
-          profitCenter: details.profitCenter || '',
-          nameOfProfitCenter: details.nameOfProfitCenter || '',
-          costCenters: details.costCenters || '',
-          nameOfCostCenters: details.nameOfCostCenters || '',
-          projectCode: details.projectCode || '',
-          projectCodeDescription: details.projectCodeDescription || '',
-          storageLocationCode: details.storageLocationCode || '',
-          storageLocationDescription: details.storageLocationDescription || ''
-        };
-        setFormData(formDataObj);
-        setOriginalData(details);
+    async function prefill() {
+      if (!open) return;
+
+      // Brand-new create (no request to edit/change)
+      if (!existingRequest && !isChangeRequest) {
+        resetForm();
+        return;
       }
-    } catch (error) {
-      console.error('Error loading existing data:', error);
+
+      // If we somehow don't have a request (shouldn't happen when editing/CR), bail
+      if (!existingRequest) return;
+
+      const anyReq: any = existingRequest;
+      const inlineDetails: Partial<PlantCodeDetails> | null = anyReq.details || null;
+      const currentReqId: string = anyReq.requestId || anyReq.id;
+
+      // 1) Prefer inline details (instant)
+      if (inlineDetails) {
+        const formDataObj = {
+          companyCode: inlineDetails.companyCode || '',
+          gstCertificate: inlineDetails.gstCertificate || '',
+          plantCode: inlineDetails.plantCode || '',
+          nameOfPlant: inlineDetails.nameOfPlant || '',
+          addressOfPlant: inlineDetails.addressOfPlant || '',
+          purchaseOrganization: inlineDetails.purchaseOrganization || '',
+          nameOfPurchaseOrganization: inlineDetails.nameOfPurchaseOrganization || '',
+          salesOrganization: inlineDetails.salesOrganization || '',
+          nameOfSalesOrganization: inlineDetails.nameOfSalesOrganization || '',
+          profitCenter: inlineDetails.profitCenter || '',
+          nameOfProfitCenter: inlineDetails.nameOfProfitCenter || '',
+          costCenters: inlineDetails.costCenters || '',
+          nameOfCostCenters: inlineDetails.nameOfCostCenters || '',
+          projectCode: inlineDetails.projectCode || '',
+          projectCodeDescription: inlineDetails.projectCodeDescription || '',
+          storageLocationCode: inlineDetails.storageLocationCode || '',
+          storageLocationDescription: inlineDetails.storageLocationDescription || ''
+        };
+        if (!active) return;
+        setFormData(formDataObj);
+        setOriginalData(inlineDetails as PlantCodeDetails);
+        setLatestVersion(typeof (inlineDetails as any)?.version === 'number' ? Number((inlineDetails as any).version) : 0);
+        // still try to fetch latest in background to ensure we're at max version (won't clobber if same)
+      }
+
+      // 2) Fetch latest details as the source of truth
+      if (currentReqId) {
+        try {
+          const fetched = await getLatestRequestDetails(currentReqId, 'plant') as PlantCodeDetails | null;
+          if (!active || !fetched) return;
+
+          const formDataObj = {
+            companyCode: fetched.companyCode || '',
+            gstCertificate: fetched.gstCertificate || '',
+            plantCode: fetched.plantCode || '',
+            nameOfPlant: fetched.nameOfPlant || '',
+            addressOfPlant: fetched.addressOfPlant || '',
+            purchaseOrganization: fetched.purchaseOrganization || '',
+            nameOfPurchaseOrganization: fetched.nameOfPurchaseOrganization || '',
+            salesOrganization: fetched.salesOrganization || '',
+            nameOfSalesOrganization: fetched.nameOfSalesOrganization || '',
+            profitCenter: fetched.profitCenter || '',
+            nameOfProfitCenter: fetched.nameOfProfitCenter || '',
+            costCenters: fetched.costCenters || '',
+            nameOfCostCenters: fetched.nameOfCostCenters || '',
+            projectCode: fetched.projectCode || '',
+            projectCodeDescription: fetched.projectCodeDescription || '',
+            storageLocationCode: fetched.storageLocationCode || '',
+            storageLocationDescription: fetched.storageLocationDescription || ''
+          };
+
+          setFormData(formDataObj);
+          setOriginalData(fetched);
+          setLatestVersion(typeof (fetched as any).version === 'number' ? (fetched as any).version : 0);
+        } catch (e) {
+          // Keep inline details if we had them; otherwise remain as-is
+          // eslint-disable-next-line no-console
+          console.error('Error loading existing plant details:', e);
+        }
+      }
     }
-  };
+
+    prefill();
+    return () => { active = false; };
+  }, [open, reqIdKey, isChangeRequest]); // stable deps
 
   const resetForm = () => {
     setFormData({
@@ -147,6 +190,8 @@ export function PlantCodeForm({
       storageLocationCode: '',
       storageLocationDescription: ''
     });
+    setOriginalData(null);
+    setLatestVersion(null);
   };
 
   const handleInputChange = (field: string, value: string) => {
@@ -172,7 +217,7 @@ export function PlantCodeForm({
 
   const validateForm = () => {
     const requiredFields = Object.keys(formData);
-    const emptyFields = requiredFields.filter(field => !formData[field as keyof typeof formData].trim());
+    const emptyFields = requiredFields.filter(field => !String(formData[field as keyof typeof formData] ?? '').trim());
     
     if (emptyFields.length > 0) {
       toast({
@@ -197,13 +242,20 @@ export function PlantCodeForm({
 
     try {
       const now = new Date().toISOString();
-      let requestId = (existingRequest as any)?.requestId || (existingRequest as any)?.id || generateRequestId();
-      
-      // For change requests, generate a new request ID
+
+      // Resolve request id
+      const anyReq: any = existingRequest || {};
+      const baseId = anyReq.requestId || anyReq.id;
+      let requestId = baseId || generateRequestId();
+
+      // For change requests, always use a new requestId
       if (isChangeRequest) {
         requestId = generateRequestId();
       }
-      
+
+      // Determine next version
+      const nextVersion = isChangeRequest ? 1 : ((latestVersion ?? 0) + 1);
+
       const request: Request = {
         requestId,
         type: 'plant',
@@ -212,54 +264,73 @@ export function PlantCodeForm({
           : `Plant Code: ${formData.plantCode} - ${formData.nameOfPlant}`,
         status: 'pending-secretary',
         createdBy: userEmail,
-        createdAt: isChangeRequest ? now : (existingRequest?.createdAt || now),
+        createdAt: isChangeRequest ? now : (anyReq.createdAt || now),
         updatedAt: now,
-        version: isChangeRequest ? 1 : ((existingRequest?.version || 0) + 1)
+        // version isn't persisted in Requests table, but we keep it for client → details write
+        version: nextVersion
       };
 
       const details: PlantCodeDetails = {
         requestId,
         ...formData,
-        version: request.version
+        version: nextVersion
       };
 
+      // Save request + details
       await saveRequest(request);
       await savePlantCodeDetails(details);
-      
-      // Track changes if this is a change request
-      let changesSummary = '';
-      if (isChangeRequest && originalData) {
-        const comparison = compareObjects(originalData, formData, 'plant');
-        changesSummary = formatChangesForNotification(comparison.changes);
-        
-        await saveHistoryLog({
-          requestId,
-          action: 'create',
-          user: userEmail,
-          timestamp: now,
-          metadata: { 
-            type: 'plant', 
-            title: request.title,
-            isChangeRequest: true,
-            originalRequestId: (existingRequest as any)?.requestId || (existingRequest as any)?.id,
-            changes: comparison.changes,
-            changesSummary
+
+      // Track history (non-critical; do not fail overall if this throws)
+      try {
+        if (isChangeRequest && originalData) {
+          const comparison = compareObjects(originalData, formData, 'plant');
+          const changesSummary = formatChangesForNotification(comparison.changes);
+          await saveHistoryLog({
+            requestId,
+            action: 'create',
+            user: userEmail,
+            timestamp: now,
+            metadata: { 
+              type: 'plant', 
+              title: request.title,
+              isChangeRequest: true,
+              originalRequestId: baseId || null,
+              changes: comparison.changes,
+              changesSummary
+            }
+          });
+        } else {
+          // edit or create
+          if (originalData) {
+            const comparison = compareObjects(originalData, formData, 'plant');
+            const changesSummary = formatChangesForNotification(comparison.changes);
+            await saveHistoryLog({
+              requestId,
+              action: existingRequest ? 'edit' : 'create',
+              user: userEmail,
+              timestamp: now,
+              metadata: { type: 'plant', title: request.title, changes: comparison.changes, changesSummary }
+            });
+          } else {
+            await saveHistoryLog({
+              requestId,
+              action: existingRequest ? 'edit' : 'create',
+              user: userEmail,
+              timestamp: now,
+              metadata: { type: 'plant', title: request.title }
+            });
           }
-        });
-      } else {
-        await saveHistoryLog({
-          requestId,
-          action: existingRequest ? 'edit' : 'create',
-          user: userEmail,
-          timestamp: now,
-          metadata: { type: 'plant', title: request.title }
-        });
+        }
+      } catch (historyError) {
+        // Non-blocking: log but don't convert success into failure
+        // eslint-disable-next-line no-console
+        console.error('Non-critical: failed to write history log', historyError);
       }
 
       toast({
         title: isChangeRequest ? "Change Request Created" : (existingRequest ? "Request Updated" : "Request Created"),
         description: isChangeRequest 
-          ? `Change request created successfully. Changes: ${changesSummary}`
+          ? "Change request created successfully."
           : (existingRequest 
             ? "Your plant code request has been updated successfully"
             : "Your plant code request has been created and submitted for approval"),
@@ -280,23 +351,40 @@ export function PlantCodeForm({
     }
   };
 
+  const renderDetectedChanges = () => {
+    if (!originalData) return null;
+    const comparison = compareObjects(originalData, formData, 'plant');
+    if (!comparison.hasChanges) return null;
+    return (
+      <div className="mt-2">
+        <p className="font-medium">Changes detected:</p>
+        <div className="text-sm bg-muted p-2 rounded mt-1 whitespace-pre-line">
+          {generateChangesSummary(comparison.changes)}
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => {
+      if (!o) {
+        setShowConfirmation(false);
+      }
+      onOpenChange(o);
+    }}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        {/* Always provide a DialogTitle for a11y; keep it visually hidden */}
+        <VisuallyHidden>
+          <DialogTitle>{dialogTitleText}</DialogTitle>
+        </VisuallyHidden>
+
         <DialogHeader>
-          <DialogTitle>
-            {isChangeRequest 
-              ? 'Create Change Request - Plant Code' 
-              : (existingRequest ? 'Edit Plant Code Request' : 'Create Plant Code Request')
-            }
-          </DialogTitle>
+          {/* Visible heading that mirrors the hidden DialogTitle */}
+          <h2 className="text-lg font-semibold leading-none tracking-tight">
+            {dialogTitleText}
+          </h2>
           <DialogDescription>
-            {isChangeRequest
-              ? 'Create a change request for this existing plant code. Changes will go through the full approval process.'
-              : (existingRequest 
-                ? 'Update your plant code creation request details' 
-                : 'Fill in all required information for plant code creation')
-            }
+            {dialogDescriptionText}
           </DialogDescription>
         </DialogHeader>
 
@@ -308,20 +396,7 @@ export function PlantCodeForm({
                 ? "Are you sure you want to create this change request? It will go through the full approval process."
                 : "Are you sure you want to confirm these changes? This will create a new version of your request."
               }
-              {isChangeRequest && originalData && (() => {
-                const comparison = compareObjects(originalData, formData, 'plant');
-                if (comparison.hasChanges) {
-                  return (
-                    <div className="mt-2">
-                      <p className="font-medium">Changes detected:</p>
-                      <div className="text-sm bg-muted p-2 rounded mt-1">
-                        {generateChangesSummary(comparison.changes)}
-                      </div>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
+              {renderDetectedChanges()}
             </AlertDescription>
             <div className="flex space-x-2 mt-3">
               <Button size="sm" onClick={handleSubmit} disabled={loading}>
@@ -377,7 +452,6 @@ export function PlantCodeForm({
                   {formData.gstCertificate || 'Upload GST Certificate'}
                 </Button>
               </div>
-
 
               <div className="space-y-2 md:col-span-2">
                 <Label htmlFor="nameOfPlant">Name of the Plant *</Label>
