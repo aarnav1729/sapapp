@@ -25,16 +25,22 @@ const { ClientSecretCredential } = require("@azure/identity");
 require("isomorphic-fetch");
 
 /* ------------------------------ Hardcoded Email ----------------------------- */
-const MS_TENANT_ID   = "1c3de7f3-f8d1-41d3-8583-2517cf3ba3b1";
-const MS_CLIENT_ID   = "3d310826-2173-44e5-b9a2-b21e940b67f7";
+const MS_TENANT_ID = "1c3de7f3-f8d1-41d3-8583-2517cf3ba3b1";
+const MS_CLIENT_ID = "3d310826-2173-44e5-b9a2-b21e940b67f7";
 const MS_CLIENT_SECRET = "2e78Q~yX92LfwTTOg4EYBjNQrXrZ2z5di1Kvebog";
-const SENDER_EMAIL   = "spot@premierenergies.com";
+const SENDER_EMAIL = "spot@premierenergies.com";
 
-const credential = new ClientSecretCredential(MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET);
+const credential = new ClientSecretCredential(
+  MS_TENANT_ID,
+  MS_CLIENT_ID,
+  MS_CLIENT_SECRET
+);
 const graphClient = Client.initWithMiddleware({
   authProvider: {
     getAccessToken: async () => {
-      const tokenResponse = await credential.getToken("https://graph.microsoft.com/.default");
+      const tokenResponse = await credential.getToken(
+        "https://graph.microsoft.com/.default"
+      );
       return tokenResponse.token;
     },
   },
@@ -62,7 +68,9 @@ async function sendEmail(toEmail, subject, htmlContent) {
       emailAddress: { address: addr },
     })),
   };
-  await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({ message, saveToSentItems: true });
+  await graphClient
+    .api(`/users/${SENDER_EMAIL}/sendMail`)
+    .post({ message, saveToSentItems: true });
 }
 
 /* ------------------------------ App & Middleware ---------------------------- */
@@ -110,14 +118,14 @@ const COMMON_DB = {
   },
 };
 
-const SPOT_DB_NAME = "SPOT";     // EMP + OTP table live here
+const SPOT_DB_NAME = "SPOT"; // EMP + OTP table live here
 const SAPAPP_DB_NAME = "sapapp"; // Your app data lives here
 
 const spotDbConfig = { ...COMMON_DB, database: SPOT_DB_NAME };
-const sapDbConfig  = { ...COMMON_DB, database: SAPAPP_DB_NAME };
+const sapDbConfig = { ...COMMON_DB, database: SAPAPP_DB_NAME };
 
 let spotPool = null; // for OTP + EMP
-let sapPool  = null; // for all app endpoints
+let sapPool = null; // for all app endpoints
 
 async function getSpotPool() {
   if (!spotPool) {
@@ -149,7 +157,9 @@ function base64ToBuffer(b64) {
 }
 
 const normalizeToEmail = (raw) => {
-  const s = String(raw || "").trim().toLowerCase();
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase();
   if (!s) return s;
   return s.includes("@") ? s : `${s}@premierenergies.com`;
 };
@@ -372,9 +382,8 @@ app.post("/api/send-otp", async (req, res) => {
     const fullEmail = normalizeToEmail(rawEmail);
 
     const pool = await getSpotPool();
-    const empQ = await pool
-      .request()
-      .input("em", sql.NVarChar(255), fullEmail).query(`
+    const empQ = await pool.request().input("em", sql.NVarChar(255), fullEmail)
+      .query(`
         SELECT EmpID, EmpName 
         FROM dbo.EMP
         WHERE EmpEmail = @em AND ActiveFlag = 1
@@ -639,28 +648,51 @@ app.patch("/api/requests/:id/status", async (req, res) => {
 
 // Plant details (UPSERT)
 app.post("/api/plant-details", async (req, res) => {
-    try {
-      const d = req.body || {};
-      const required = ["requestId", "version", "companyCode", "plantCode", "nameOfPlant"];
-      for (const k of required) if (d[k] == null || d[k] === "") return fail(res, 400, `${k} is required`);
-  
-      const pool = await getSapPool();
-      const r = pool.request();
-  
-      for (const [k, v] of Object.entries(d)) {
-        if (k === "version") r.input(k, sql.Int, Number(v));
-        else if (k === "requestId") r.input(k, sql.NVarChar(36), v);
-        else if ([
-          "companyCode","plantCode","nameOfPlant","addressOfPlant","purchaseOrganization",
-          "nameOfPurchaseOrganization","salesOrganization","nameOfSalesOrganization","profitCenter",
-          "nameOfProfitCenter","costCenters","nameOfCostCenters","projectCode","projectCodeDescription",
-          "storageLocationCode","storageLocationDescription","gstCertificate",
-        ].includes(k)) {
-          r.input(k, sql.NVarChar(sql.MAX), v ?? null);
-        }
+  try {
+    const d = req.body || {};
+    const required = [
+      "requestId",
+      "version",
+      "companyCode",
+      "plantCode",
+      "nameOfPlant",
+    ];
+    for (const k of required)
+      if (d[k] == null || d[k] === "")
+        return fail(res, 400, `${k} is required`);
+
+    const pool = await getSapPool();
+    const r = pool.request();
+
+    for (const [k, v] of Object.entries(d)) {
+      if (k === "version") r.input(k, sql.Int, Number(v));
+      else if (k === "requestId") r.input(k, sql.NVarChar(36), v);
+      else if (
+        [
+          "companyCode",
+          "plantCode",
+          "nameOfPlant",
+          "addressOfPlant",
+          "purchaseOrganization",
+          "nameOfPurchaseOrganization",
+          "salesOrganization",
+          "nameOfSalesOrganization",
+          "profitCenter",
+          "nameOfProfitCenter",
+          "costCenters",
+          "nameOfCostCenters",
+          "projectCode",
+          "projectCodeDescription",
+          "storageLocationCode",
+          "storageLocationDescription",
+          "gstCertificate",
+        ].includes(k)
+      ) {
+        r.input(k, sql.NVarChar(sql.MAX), v ?? null);
       }
-  
-      await r.query(`
+    }
+
+    await r.query(`
         IF EXISTS (SELECT 1 FROM dbo.PlantCodeDetails WHERE requestId=@requestId AND version=@version)
         BEGIN
           UPDATE dbo.PlantCodeDetails
@@ -698,13 +730,13 @@ app.post("/api/plant-details", async (req, res) => {
           );
         END
       `);
-  
-      ok(res, { requestId: d.requestId, version: Number(d.version) });
-    } catch (err) {
-      console.error("Plant UPSERT failed:", err);
-      fail(res, 500, "Failed to save plant details", err.message);
-    }
-  });
+
+    ok(res, { requestId: d.requestId, version: Number(d.version) });
+  } catch (err) {
+    console.error("Plant UPSERT failed:", err);
+    fail(res, 500, "Failed to save plant details", err.message);
+  }
+});
 
 app.get("/api/plant-details/:requestId/latest", async (req, res) => {
   try {
@@ -740,31 +772,43 @@ app.get("/api/plant-details/:requestId", async (req, res) => {
 
 // Company details
 app.post("/api/company-details", async (req, res) => {
-    try {
-      const d = req.body || {};
-      const required = ["requestId", "version", "companyCode", "nameOfCompanyCode"];
-      for (const k of required) if (d[k] == null || d[k] === "") return fail(res, 400, `${k} is required`);
-  
-      // Coerce shareholdingPercentage cleanly: empty string -> NULL
-      const sharePct =
-        d.shareholdingPercentage === "" || d.shareholdingPercentage == null
-          ? null
-          : Number(d.shareholdingPercentage);
-  
-      const pool = await getSapPool();
-      const r = pool.request()
-        .input("requestId", sql.NVarChar(36), d.requestId)
-        .input("version", sql.Int, Number(d.version))
-        .input("companyCode", sql.NVarChar(sql.MAX), d.companyCode ?? null)
-        .input("nameOfCompanyCode", sql.NVarChar(sql.MAX), d.nameOfCompanyCode ?? null)
-        .input("shareholdingPercentage", sql.Decimal(5, 2), sharePct)
-        .input("gstCertificate", sql.NVarChar(sql.MAX), d.gstCertificate ?? null)
-        .input("cin", sql.NVarChar(sql.MAX), d.cin ?? null)
-        .input("pan", sql.NVarChar(sql.MAX), d.pan ?? null)
-        .input("segment", sql.NVarChar(sql.MAX), d.segment ?? null)
-        .input("nameOfSegment", sql.NVarChar(sql.MAX), d.nameOfSegment ?? null);
-  
-      await r.query(`
+  try {
+    const d = req.body || {};
+    const required = [
+      "requestId",
+      "version",
+      "companyCode",
+      "nameOfCompanyCode",
+    ];
+    for (const k of required)
+      if (d[k] == null || d[k] === "")
+        return fail(res, 400, `${k} is required`);
+
+    // Coerce shareholdingPercentage cleanly: empty string -> NULL
+    const sharePct =
+      d.shareholdingPercentage === "" || d.shareholdingPercentage == null
+        ? null
+        : Number(d.shareholdingPercentage);
+
+    const pool = await getSapPool();
+    const r = pool
+      .request()
+      .input("requestId", sql.NVarChar(36), d.requestId)
+      .input("version", sql.Int, Number(d.version))
+      .input("companyCode", sql.NVarChar(sql.MAX), d.companyCode ?? null)
+      .input(
+        "nameOfCompanyCode",
+        sql.NVarChar(sql.MAX),
+        d.nameOfCompanyCode ?? null
+      )
+      .input("shareholdingPercentage", sql.Decimal(5, 2), sharePct)
+      .input("gstCertificate", sql.NVarChar(sql.MAX), d.gstCertificate ?? null)
+      .input("cin", sql.NVarChar(sql.MAX), d.cin ?? null)
+      .input("pan", sql.NVarChar(sql.MAX), d.pan ?? null)
+      .input("segment", sql.NVarChar(sql.MAX), d.segment ?? null)
+      .input("nameOfSegment", sql.NVarChar(sql.MAX), d.nameOfSegment ?? null);
+
+    await r.query(`
         IF EXISTS (SELECT 1 FROM dbo.CompanyCodeDetails WHERE requestId=@requestId AND version=@version)
         BEGIN
           UPDATE dbo.CompanyCodeDetails
@@ -787,13 +831,13 @@ app.post("/api/company-details", async (req, res) => {
           );
         END
       `);
-  
-      ok(res, { requestId: d.requestId, version: Number(d.version) });
-    } catch (err) {
-      console.error("Company UPSERT failed:", err);
-      fail(res, 500, "Failed to save company details", err.message);
-    }
-  });
+
+    ok(res, { requestId: d.requestId, version: Number(d.version) });
+  } catch (err) {
+    console.error("Company UPSERT failed:", err);
+    fail(res, 500, "Failed to save company details", err.message);
+  }
+});
 
 app.get("/api/company-details/:requestId/latest", async (req, res) => {
   try {
@@ -1076,6 +1120,89 @@ app.get("/api/requests-with-details", async (req, res) => {
   }
 });
 
+// Master code lookups (read-only)
+app.get("/api/master/plant-codes", async (req, res) => {
+  try {
+    const {
+      q,
+      companyCode,
+      plantCode,
+      limit = "1000",
+      offset = "0",
+    } = req.query;
+    const pool = await getSapPool();
+    let sqlText = `
+      SELECT companyCode, plantCode, gstCertificate, nameOfPlant, addressOfPlant,
+             purchaseOrganization, nameOfPurchaseOrganization, salesOrganization, nameOfSalesOrganization,
+             profitCenter, nameOfProfitCenter, costCenters, nameOfCostCenters,
+             projectCode, projectCodeDescription, storageLocationCode, storageLocationDescription
+      FROM dbo.MasterPlantCodes WHERE 1=1
+    `;
+    const r = pool.request();
+
+    if (companyCode) {
+      sqlText += " AND companyCode = @cc";
+      r.input("cc", sql.NVarChar(50), String(companyCode));
+    }
+    if (plantCode) {
+      sqlText += " AND plantCode = @pc";
+      r.input("pc", sql.NVarChar(50), String(plantCode));
+    }
+    if (q) {
+      sqlText += ` AND (
+        companyCode LIKE @q OR plantCode LIKE @q OR nameOfPlant LIKE @q
+        OR purchaseOrganization LIKE @q OR salesOrganization LIKE @q
+        OR profitCenter LIKE @q OR projectCode LIKE @q OR storageLocationCode LIKE @q
+      )`;
+      r.input("q", sql.NVarChar(200), `%${String(q)}%`);
+    }
+
+    sqlText +=
+      " ORDER BY companyCode, plantCode OFFSET @off ROWS FETCH NEXT @lim ROWS ONLY";
+    r.input("off", sql.Int, Number(offset) || 0);
+    r.input("lim", sql.Int, Math.min(10000, Number(limit) || 1000));
+
+    const rs = await r.query(sqlText);
+    ok(res, rs.recordset);
+  } catch (err) {
+    fail(res, 500, "Failed to list plant master", err.message);
+  }
+});
+
+app.get("/api/master/company-codes", async (req, res) => {
+  try {
+    const { q, companyCode, limit = "1000", offset = "0" } = req.query;
+    const pool = await getSapPool();
+    let sqlText = `
+      SELECT companyCode, nameOfCompanyCode, shareholdingPercentage, segment, nameOfSegment, cin, pan, gstCertificate
+      FROM dbo.MasterCompanyCodes WHERE 1=1
+    `;
+    const r = pool.request();
+
+    if (companyCode) {
+      sqlText += " AND companyCode = @cc";
+      r.input("cc", sql.NVarChar(50), String(companyCode));
+    }
+    if (q) {
+      sqlText += ` AND (
+        companyCode LIKE @q OR nameOfCompanyCode LIKE @q OR segment LIKE @q
+        OR nameOfSegment LIKE @q OR cin LIKE @q OR pan LIKE @q
+      )`;
+      r.input("q", sql.NVarChar(200), `%${String(q)}%`);
+    }
+
+    sqlText +=
+      " ORDER BY companyCode OFFSET @off ROWS FETCH NEXT @lim ROWS ONLY";
+    r.input("off", sql.Int, Number(offset) || 0);
+    r.input("lim", sql.Int, Math.min(10000, Number(limit) || 1000));
+
+    const rs = await r.query(sqlText);
+    ok(res, rs.recordset);
+  } catch (err) {
+    fail(res, 500, "Failed to list company master", err.message);
+  }
+});
+
 /* ------------------------------ SPA fallback --------------------------------
    This must be after all /api/* routes to let the SPA handle front-end routing.
 ------------------------------------------------------------------------------- */
@@ -1084,12 +1211,18 @@ app.get(/.*/, (req, res) => {
 });
 
 /* --------------------------------- HTTPS ----------------------------------- */
-const PORT = 14443;           // single HTTPS port
+const PORT = 14443; // single HTTPS port
 const HOST = "0.0.0.0";
 const httpsOptions = {
   key: fs.readFileSync(path.join(__dirname, "certs", "mydomain.key"), "utf8"),
-  cert: fs.readFileSync(path.join(__dirname, "certs", "d466aacf3db3f299.crt"), "utf8"),
-  ca: fs.readFileSync(path.join(__dirname, "certs", "gd_bundle-g2-g1.crt"), "utf8"),
+  cert: fs.readFileSync(
+    path.join(__dirname, "certs", "d466aacf3db3f299.crt"),
+    "utf8"
+  ),
+  ca: fs.readFileSync(
+    path.join(__dirname, "certs", "gd_bundle-g2-g1.crt"),
+    "utf8"
+  ),
 };
 
 /* --------------------------------- Startup --------------------------------- */

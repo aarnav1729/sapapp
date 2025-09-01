@@ -7,24 +7,24 @@
 
 export interface User {
   email: string;
-  role: 'requestor' | 'it' | 'secretary' | 'siva' | 'raghu' | 'manoj' | 'admin';
+  role: "requestor" | "it" | "secretary" | "siva" | "raghu" | "manoj" | "admin";
   createdAt: string;
 }
 
 export interface Request {
   requestId: string;
-  type: 'plant' | 'company';
+  type: "plant" | "company";
   title: string;
   status:
-    | 'draft'
-    | 'pending-secretary'
-    | 'pending-siva'
-    | 'pending-raghu'
-    | 'pending-manoj'
-    | 'approved'
-    | 'rejected'
-    | 'sap-updated'
-    | 'completed';
+    | "draft"
+    | "pending-secretary"
+    | "pending-siva"
+    | "pending-raghu"
+    | "pending-manoj"
+    | "approved"
+    | "rejected"
+    | "sap-updated"
+    | "completed";
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -87,7 +87,7 @@ export interface Approval {
   requestId: string;
   approverEmail: string;
   role: string;
-  decision: 'approve' | 'reject';
+  decision: "approve" | "reject";
   comment: string;
   attachmentId?: string;
   timestamp: string;
@@ -95,7 +95,7 @@ export interface Approval {
 
 export interface HistoryLog {
   requestId: string;
-  action: 'create' | 'edit' | 'approve' | 'reject' | 'update-sap';
+  action: "create" | "edit" | "approve" | "reject" | "update-sap";
   user: string;
   timestamp: string;
   metadata: any;
@@ -112,25 +112,27 @@ export interface Session {
    ================================ */
 
 const API_BASE: string =
-  (typeof import.meta !== 'undefined' &&
+  (typeof import.meta !== "undefined" &&
     (import.meta as any)?.env?.VITE_API_BASE_URL) ||
   // If you're serving FE and BE on different ports locally:
-  (window?.location?.hostname === 'localhost'
-    ? 'https://localhost:14443'
-    : window.location.origin.replace(/\/+$/, ''));
+  (window?.location?.hostname === "localhost"
+    ? "https://localhost:14443"
+    : window.location.origin.replace(/\/+$/, ""));
 
-type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error: string; detail?: any };
+type ApiEnvelope<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; detail?: any };
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-    credentials: 'omit',
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    credentials: "omit",
     ...init,
   });
 
   // Binary streams (attachments)
-  const ct = resp.headers.get('content-type') || '';
-  const isJson = ct.includes('application/json');
+  const ct = resp.headers.get("content-type") || "";
+  const isJson = ct.includes("application/json");
 
   if (!resp.ok) {
     const body = isJson ? await resp.json().catch(() => ({})) : {};
@@ -146,9 +148,9 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const body = (await resp.json()) as ApiEnvelope<T>;
-  if (!('ok' in body) || body.ok !== true) {
+  if (!("ok" in body) || body.ok !== true) {
     throw new Error(
-      (body as any)?.error || 'Unknown API error (unexpected envelope)'
+      (body as any)?.error || "Unknown API error (unexpected envelope)"
     );
   }
   return body.data;
@@ -170,18 +172,18 @@ function toISO(d?: string | number | Date | null) {
 
 let _initted = false;
 
-/** 
+/**
  * Previous implementation returned an IDB instance; now we just ping the API.
  * Kept to avoid touching the rest of the app code.
  */
 export async function initDB(): Promise<null> {
   if (_initted) return null;
   try {
-    await http<{ status: string }>('/health');
+    await http<{ status: string }>("/health");
   } catch (e) {
     // Don’t throw here; allow UI to render while server boots
     // eslint-disable-next-line no-console
-    console.error('Health check failed:', e);
+    console.error("Health check failed:", e);
   }
   _initted = true;
   return null;
@@ -191,7 +193,7 @@ export async function initDB(): Promise<null> {
    Session (temporary localStorage until login is implemented)
    ================================ */
 
-const SESSION_KEY = 'pel_session';
+const SESSION_KEY = "pel_session";
 
 export async function saveSession(session: Session) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -224,35 +226,45 @@ export async function clearSession() {
 export async function getUserRole(email: string): Promise<string> {
   await initDB();
   try {
-    const user = await http<User | null>(`/api/users/${encodeURIComponent(email)}`);
-    return user?.role || 'requestor';
+    const user = await http<User | null>(
+      `/api/users/${encodeURIComponent(email)}`
+    );
+    return user?.role || "requestor";
   } catch (e) {
     // fallback to requestor if not found/failed
-    return 'requestor';
+    return "requestor";
   }
 }
 
 export const getAllUsers = async (): Promise<User[]> => {
   await initDB();
-  const users = await http<User[]>('/api/users');
+  const users = await http<User[]>("/api/users");
   return users;
 };
 
-export const createUser = async (email: string, role: string): Promise<void> => {
+export const createUser = async (
+  email: string,
+  role: string
+): Promise<void> => {
   await initDB();
   const payload = { email, role };
-  await http<User>('/api/users', { method: 'POST', body: JSON.stringify(payload) });
+  await http<User>("/api/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 };
 
 export const getUserByEmail = async (email: string): Promise<User | null> => {
   await initDB();
-  const user = await http<User | null>(`/api/users/${encodeURIComponent(email)}`);
+  const user = await http<User | null>(
+    `/api/users/${encodeURIComponent(email)}`
+  );
   return user || null;
 };
 
 export const deleteUser = async (email: string): Promise<void> => {
   await initDB();
-  await http(`/api/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
+  await http(`/api/users/${encodeURIComponent(email)}`, { method: "DELETE" });
 };
 
 /* ================================
@@ -262,8 +274,8 @@ export const deleteUser = async (email: string): Promise<void> => {
 export async function saveRequest(request: Request) {
   await initDB();
   // server generates/updates updatedAt; keep compatibility
-  await http<{ requestId: string }>('/api/requests', {
-    method: 'POST',
+  await http<{ requestId: string }>("/api/requests", {
+    method: "POST",
     body: JSON.stringify({
       requestId: request.requestId,
       type: request.type,
@@ -283,42 +295,44 @@ export async function saveRequest(request: Request) {
 export async function getRequestsByUser(email: string): Promise<Request[]> {
   await initDB();
   type Row = Request & { details: any | null; approvalsCount: number };
-  const rows = await http<Row[]>('/api/requests-with-details');
+  const rows = await http<Row[]>("/api/requests-with-details");
   const filtered = rows.filter(
-    (r) => (r.createdBy || '').toLowerCase() === email.toLowerCase()
+    (r) => (r.createdBy || "").toLowerCase() === email.toLowerCase()
   );
   // Keep existing return shape the rest of the app expects.
-  return sortByDateDesc(filtered, 'createdAt') as unknown as Request[];
+  return sortByDateDesc(filtered, "createdAt") as unknown as Request[];
 }
 
 export async function getAllRequests(): Promise<Request[]> {
   await initDB();
-  const data = await http<Request[]>('/api/requests');
-  return sortByDateDesc(data, 'createdAt');
+  const data = await http<Request[]>("/api/requests");
+  return sortByDateDesc(data, "createdAt");
 }
 
-export async function getPendingRequestsForRole(role: string): Promise<Request[]> {
+export async function getPendingRequestsForRole(
+  role: string
+): Promise<Request[]> {
   await initDB();
-  const statusMap: Record<string, Request['status']> = {
-    secretary: 'pending-secretary',
-    siva: 'pending-siva',
-    raghu: 'pending-raghu',
-    manoj: 'pending-manoj',
+  const statusMap: Record<string, Request["status"]> = {
+    secretary: "pending-secretary",
+    siva: "pending-siva",
+    raghu: "pending-raghu",
+    manoj: "pending-manoj",
   };
   const status = statusMap[role];
   if (!status) return [];
   const q = new URLSearchParams({ status });
   const data = await http<Request[]>(`/api/requests?${q.toString()}`);
-  return sortByDateDesc(data, 'createdAt');
+  return sortByDateDesc(data, "createdAt");
 }
 
 export const updateRequestStatus = async (
   requestId: string,
-  status: Request['status']
+  status: Request["status"]
 ): Promise<void> => {
   await initDB();
   await http(`/api/requests/${encodeURIComponent(requestId)}/status`, {
-    method: 'PATCH',
+    method: "PATCH",
     body: JSON.stringify({ status }),
   });
 };
@@ -329,26 +343,26 @@ export const updateRequestStatus = async (
 
 export async function savePlantCodeDetails(details: PlantCodeDetails) {
   await initDB();
-  await http('/api/plant-details', {
-    method: 'POST',
+  await http("/api/plant-details", {
+    method: "POST",
     body: JSON.stringify(details),
   });
 }
 
 export async function saveCompanyCodeDetails(details: CompanyCodeDetails) {
   await initDB();
-  await http('/api/company-details', {
-    method: 'POST',
+  await http("/api/company-details", {
+    method: "POST",
     body: JSON.stringify(details),
   });
 }
 
 export async function getLatestRequestDetails(
   requestId: string,
-  type: 'plant' | 'company'
+  type: "plant" | "company"
 ) {
   await initDB();
-  if (type === 'plant') {
+  if (type === "plant") {
     return await http<PlantCodeDetails | null>(
       `/api/plant-details/${encodeURIComponent(requestId)}/latest`
     );
@@ -359,14 +373,33 @@ export async function getLatestRequestDetails(
   }
 }
 
+/** Fetch all versions (DESC by version on server) for change highlighting */
+export async function getAllRequestDetailsVersions(
+  requestId: string,
+  type: "plant" | "company"
+): Promise<Array<PlantCodeDetails | CompanyCodeDetails>> {
+  await initDB();
+  if (type === "plant") {
+    const rows = await http<PlantCodeDetails[]>(
+      `/api/plant-details/${encodeURIComponent(requestId)}`
+    );
+    return rows || [];
+  } else {
+    const rows = await http<CompanyCodeDetails[]>(
+      `/api/company-details/${encodeURIComponent(requestId)}`
+    );
+    return rows || [];
+  }
+}
+
 /* ================================
    Approvals & History
    ================================ */
 
 export async function saveApproval(approval: Approval) {
   await initDB();
-  await http('/api/approvals', {
-    method: 'POST',
+  await http("/api/approvals", {
+    method: "POST",
     body: JSON.stringify(approval),
   });
 }
@@ -375,14 +408,14 @@ export const addApproval = async (
   requestId: string,
   approverEmail: string,
   role: string,
-  decision: 'approve' | 'reject',
+  decision: "approve" | "reject",
   comment: string,
   attachmentId?: string
 ): Promise<void> => {
   await initDB();
   const timestamp = toISO();
-  await http('/api/approvals', {
-    method: 'POST',
+  await http("/api/approvals", {
+    method: "POST",
     body: JSON.stringify({
       requestId,
       approverEmail,
@@ -395,11 +428,11 @@ export const addApproval = async (
   });
 
   // Also log the action (for analytics & audit)
-  await http('/api/history', {
-    method: 'POST',
+  await http("/api/history", {
+    method: "POST",
     body: JSON.stringify({
       requestId,
-      action: decision === 'approve' ? 'approve' : 'reject',
+      action: decision === "approve" ? "approve" : "reject",
       user: approverEmail,
       timestamp,
       metadata: { comment, role, decision },
@@ -407,7 +440,9 @@ export const addApproval = async (
   });
 };
 
-export async function getApprovalsForRequest(requestId: string): Promise<Approval[]> {
+export async function getApprovalsForRequest(
+  requestId: string
+): Promise<Approval[]> {
   await initDB();
   const data = await http<Approval[]>(
     `/api/approvals/${encodeURIComponent(requestId)}`
@@ -419,18 +454,20 @@ export async function getApprovalsForRequest(requestId: string): Promise<Approva
 
 export async function saveHistoryLog(log: HistoryLog) {
   await initDB();
-  await http('/api/history', {
-    method: 'POST',
+  await http("/api/history", {
+    method: "POST",
     body: JSON.stringify(log),
   });
 }
 
-export async function getHistoryForRequest(requestId: string): Promise<HistoryLog[]> {
+export async function getHistoryForRequest(
+  requestId: string
+): Promise<HistoryLog[]> {
   await initDB();
   const data = await http<HistoryLog[]>(
     `/api/history/${encodeURIComponent(requestId)}`
   );
-  return sortByDateDesc(data, 'timestamp');
+  return sortByDateDesc(data, "timestamp");
 }
 
 /* ================================
@@ -447,8 +484,8 @@ export const uploadAttachment = async (args: {
   uploadedBy: string;
 }): Promise<{ attachmentId: string }> => {
   await initDB();
-  const res = await http<{ attachmentId: string }>('/api/attachments', {
-    method: 'POST',
+  const res = await http<{ attachmentId: string }>("/api/attachments", {
+    method: "POST",
     body: JSON.stringify(args),
   });
   return res;
@@ -456,7 +493,7 @@ export const uploadAttachment = async (args: {
 
 export const getAttachmentsForRequest = async (
   requestId: string
-): Promise<Omit<Attachment, 'fileContent'>[]> => {
+): Promise<Omit<Attachment, "fileContent">[]> => {
   await initDB();
   const data = await http<
     Array<{
@@ -477,7 +514,7 @@ export const getAttachmentsForRequest = async (
     fileName: d.fileName,
     fileType: d.fileType,
     version: d.version,
-    title: d.title || '',
+    title: d.title || "",
     uploadedBy: d.uploadedBy,
     uploadedAt: d.uploadedAt,
   }));
@@ -490,7 +527,7 @@ export const getAttachmentDataUrl = async (
   await initDB();
   const resp = await fetch(
     `${API_BASE}/api/attachment/${encodeURIComponent(attachmentId)}`,
-    { method: 'GET' }
+    { method: "GET" }
   );
   if (!resp.ok) throw new Error(`Failed to fetch attachment ${attachmentId}`);
   const blob = await resp.blob();
@@ -500,7 +537,7 @@ export const getAttachmentDataUrl = async (
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read blob'));
+    reader.onerror = () => reject(new Error("Failed to read blob"));
     reader.onload = () => resolve(String(reader.result));
     reader.readAsDataURL(blob);
   });
@@ -513,8 +550,8 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 export const getRequestsWithDetails = async (): Promise<
   Array<{
     id: string;
-    type: Request['type'];
-    status: Request['status'];
+    type: Request["type"];
+    status: Request["status"];
     createdBy: string;
     createdAt: string;
     updatedAt: string;
@@ -531,7 +568,7 @@ export const getRequestsWithDetails = async (): Promise<
         approvalsCount: number;
       }
     >
-  >('/api/requests-with-details');
+  >("/api/requests-with-details");
 
   // Conform to the shape your dashboards expect (id instead of requestId, include approvals array empty by default)
   return rows.map((r) => ({
@@ -564,7 +601,7 @@ export const markRequestCompleted = async (
   }
 
   const completedAt = toISO();
-  await updateRequestStatus(requestId, 'completed');
+  await updateRequestStatus(requestId, "completed");
 
   if (req?.createdAt) {
     const createdDate = new Date(req.createdAt);
@@ -576,7 +613,7 @@ export const markRequestCompleted = async (
     // Record in history
     await saveHistoryLog({
       requestId,
-      action: 'update-sap',
+      action: "update-sap",
       user: completedBy,
       timestamp: completedAt,
       metadata: { turnaroundTime, completedBy },
@@ -586,7 +623,7 @@ export const markRequestCompleted = async (
 
 export const getCompletedRequests = async (): Promise<Request[]> => {
   await initDB();
-  const q = new URLSearchParams({ status: 'completed' });
+  const q = new URLSearchParams({ status: "completed" });
   const data = await http<Request[]>(`/api/requests?${q.toString()}`);
   // If server doesn’t compute completedAt, use updatedAt
   return [...data].sort(
@@ -609,4 +646,77 @@ export function generateRequestId(): string {
     .toString(36)
     .substring(2, 8)
     .toUpperCase()}`;
+}
+
+/* ================================
+   Master code lookups
+   ================================ */
+
+export interface PlantCodeMaster {
+  companyCode: string;
+  plantCode: string;
+  gstCertificate: string | null;
+  nameOfPlant: string;
+  addressOfPlant: string | null;
+  purchaseOrganization: string | null;
+  nameOfPurchaseOrganization: string | null;
+  salesOrganization: string | null;
+  nameOfSalesOrganization: string | null;
+  profitCenter: string | null;
+  nameOfProfitCenter: string | null;
+  costCenters: string | null;
+  nameOfCostCenters: string | null;
+  projectCode: string | null;
+  projectCodeDescription: string | null;
+  storageLocationCode: string | null;
+  storageLocationDescription: string | null;
+}
+
+export interface CompanyCodeMaster {
+  companyCode: string;
+  nameOfCompanyCode: string;
+  shareholdingPercentage: number | null;
+  segment: string | null;
+  nameOfSegment: string | null;
+  cin: string | null;
+  pan: string | null;
+  gstCertificate: string | null;
+}
+
+export async function getMasterPlantCodes(opts?: {
+  q?: string;
+  companyCode?: string;
+  plantCode?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<PlantCodeMaster[]> {
+  await initDB();
+  const params = new URLSearchParams();
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.companyCode) params.set("companyCode", opts.companyCode);
+  if (opts?.plantCode) params.set("plantCode", opts.plantCode);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  return await http<PlantCodeMaster[]>(
+    `/api/master/plant-codes${params.toString() ? `?${params.toString()}` : ""}`
+  );
+}
+
+export async function getMasterCompanyCodes(opts?: {
+  q?: string;
+  companyCode?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<CompanyCodeMaster[]> {
+  await initDB();
+  const params = new URLSearchParams();
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.companyCode) params.set("companyCode", opts.companyCode);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  return await http<CompanyCodeMaster[]>(
+    `/api/master/company-codes${
+      params.toString() ? `?${params.toString()}` : ""
+    }`
+  );
 }

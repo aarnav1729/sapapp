@@ -14,7 +14,7 @@ export interface CompareResult {
 }
 
 // Field labels for better display
-const PLANT_CODE_LABELS: Record<string, string> = {
+export const PLANT_CODE_LABELS: Record<string, string> = {
   companyCode: 'Company Code',
   plantCode: 'Plant Code',
   nameOfPlant: 'Name of Plant',
@@ -34,7 +34,7 @@ const PLANT_CODE_LABELS: Record<string, string> = {
   gstCertificate: 'GST Certificate'
 };
 
-const COMPANY_CODE_LABELS: Record<string, string> = {
+export const COMPANY_CODE_LABELS: Record<string, string> = {
   companyCode: 'Company Code',
   nameOfCompanyCode: 'Name of Company Code',
   shareholdingPercentage: 'Shareholding Percentage',
@@ -63,14 +63,14 @@ export function compareObjects(oldObj: any, newObj: any, type: 'plant' | 'compan
     const newValue = newObj?.[field];
 
     // Convert values to strings for comparison to handle different types
-    const oldStr = String(oldValue || '');
-    const newStr = String(newValue || '');
+    const oldStr = String(oldValue ?? '');
+    const newStr = String(newValue ?? '');
 
     if (oldStr !== newStr) {
       changes.push({
         field,
-        oldValue: oldValue || '',
-        newValue: newValue || '',
+        oldValue: oldValue ?? '',
+        newValue: newValue ?? '',
         label: labels[field] || field
       });
       changedFields.push(field);
@@ -101,3 +101,19 @@ export function generateChangesSummary(changes: FieldChange[]): string {
     `• ${change.label}: "${change.oldValue}" → "${change.newValue}"`
   ).join('\n');
 }
+
+// Explicit re-exports (some bundlers are picky)
+export {
+  compareObjects as _compareObjects,
+  formatChangesForNotification as _formatChangesForNotification,
+  generateChangesSummary as _generateChangesSummary,
+};
+
+// Optional default export for maximum compatibility
+export default {
+  compareObjects,
+  formatChangesForNotification,
+  generateChangesSummary,
+  PLANT_CODE_LABELS,
+  COMPANY_CODE_LABELS,
+};

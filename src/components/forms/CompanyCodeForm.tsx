@@ -1,13 +1,25 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Upload, Building, AlertTriangle } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
-import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
+import { useState, useEffect, useMemo } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Upload, Building, AlertTriangle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import {
   Request,
   CompanyCodeDetails,
@@ -15,9 +27,14 @@ import {
   saveCompanyCodeDetails,
   saveHistoryLog,
   generateRequestId,
-  getLatestRequestDetails
-} from '@/lib/storage';
-import { compareObjects, formatChangesForNotification, generateChangesSummary } from '@/lib/changeTracking';
+  getLatestRequestDetails,
+  uploadAttachment,
+} from "@/lib/storage";
+import {
+  compareObjects,
+  formatChangesForNotification,
+  generateChangesSummary,
+} from "@/lib/changeTracking";
 
 interface CompanyCodeFormProps {
   open: boolean;
@@ -28,46 +45,58 @@ interface CompanyCodeFormProps {
   onSuccess: () => void;
 }
 
-export function CompanyCodeForm({ 
-  open, 
-  onOpenChange, 
-  userEmail, 
+export function CompanyCodeForm({
+  open,
+  onOpenChange,
+  userEmail,
   existingRequest,
   isChangeRequest = false,
-  onSuccess 
+  onSuccess,
 }: CompanyCodeFormProps) {
   const [loading, setLoading] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const [originalData, setOriginalData] = useState<CompanyCodeDetails | null>(null);
+  const [originalData, setOriginalData] = useState<CompanyCodeDetails | null>(
+    null
+  );
   const [latestVersion, setLatestVersion] = useState<number | null>(null);
   const { toast } = useToast();
+  const [attachmentsDraft, setAttachmentsDraft] = useState<
+    Record<string, { fileName: string; fileType: string; dataUrl: string }>
+  >({});
+  const ATTACH_TITLES: Record<string, string> = {
+    gstCertificate: "GST Certificate",
+    cin: "CIN",
+    pan: "PAN",
+  };
 
   // memo key for effect dependencies
   const reqIdKey = useMemo(() => {
     const anyReq: any = existingRequest || {};
-    return anyReq.requestId || anyReq.id || '';
+    return anyReq.requestId || anyReq.id || "";
   }, [existingRequest]);
 
-  const dialogTitleText = isChangeRequest 
-    ? 'Create Change Request - Company Code'
-    : (existingRequest ? 'Edit Company Code Request' : 'Create Company Code Request');
+  const dialogTitleText = isChangeRequest
+    ? "Create Change Request - Company Code"
+    : existingRequest
+    ? "Edit Company Code Request"
+    : "Create Company Code Request";
 
   const dialogDescriptionText = isChangeRequest
-    ? 'Create a change request for this existing company code. Changes will go through the full approval process.'
-    : (existingRequest 
-        ? 'Update your company code creation request details' 
-        : 'Fill in all required information for company code creation');
+    ? "Create a change request for this existing company code. Changes will go through the full approval process."
+    : existingRequest
+    ? "Update your company code creation request details"
+    : "Fill in all required information for company code creation";
 
   // Form data
   const [formData, setFormData] = useState({
-    companyCode: '',
-    nameOfCompanyCode: '',
-    shareholdingPercentage: '',
-    gstCertificate: '',
-    cin: '',
-    pan: '',
-    segment: '',
-    nameOfSegment: ''
+    companyCode: "",
+    nameOfCompanyCode: "",
+    shareholdingPercentage: "",
+    gstCertificate: "",
+    cin: "",
+    pan: "",
+    segment: "",
+    nameOfSegment: "",
   });
 
   // Robust prefill: inline details -> fetch latest; prevent races
@@ -86,84 +115,110 @@ export function CompanyCodeForm({
       if (!existingRequest) return;
 
       const anyReq: any = existingRequest;
-      const inlineDetails: Partial<CompanyCodeDetails> | null = anyReq.details || null;
+      const inlineDetails: Partial<CompanyCodeDetails> | null =
+        anyReq.details || null;
       const currentReqId: string = anyReq.requestId || anyReq.id;
 
       // 1) Inline details if present
       if (inlineDetails) {
         setFormData({
-          companyCode: inlineDetails.companyCode || '',
-          nameOfCompanyCode: inlineDetails.nameOfCompanyCode || '',
-          shareholdingPercentage: (inlineDetails.shareholdingPercentage ?? '').toString(),
-          gstCertificate: inlineDetails.gstCertificate || '',
-          cin: inlineDetails.cin || '',
-          pan: inlineDetails.pan || '',
-          segment: inlineDetails.segment || '',
-          nameOfSegment: inlineDetails.nameOfSegment || ''
+          companyCode: inlineDetails.companyCode || "",
+          nameOfCompanyCode: inlineDetails.nameOfCompanyCode || "",
+          shareholdingPercentage: (
+            inlineDetails.shareholdingPercentage ?? ""
+          ).toString(),
+          gstCertificate: inlineDetails.gstCertificate || "",
+          cin: inlineDetails.cin || "",
+          pan: inlineDetails.pan || "",
+          segment: inlineDetails.segment || "",
+          nameOfSegment: inlineDetails.nameOfSegment || "",
         });
         setOriginalData(inlineDetails as CompanyCodeDetails);
-        setLatestVersion(typeof (inlineDetails as any)?.version === 'number' ? Number((inlineDetails as any).version) : 0);
+        setLatestVersion(
+          typeof (inlineDetails as any)?.version === "number"
+            ? Number((inlineDetails as any).version)
+            : 0
+        );
       }
 
       // 2) Fetch latest from API
       if (currentReqId) {
         try {
-          const fetched = await getLatestRequestDetails(currentReqId, 'company') as CompanyCodeDetails | null;
+          const fetched = (await getLatestRequestDetails(
+            currentReqId,
+            "company"
+          )) as CompanyCodeDetails | null;
           if (!active || !fetched) return;
 
           setFormData({
-            companyCode: fetched.companyCode || '',
-            nameOfCompanyCode: fetched.nameOfCompanyCode || '',
-            shareholdingPercentage: (fetched.shareholdingPercentage ?? '').toString(),
-            gstCertificate: fetched.gstCertificate || '',
-            cin: fetched.cin || '',
-            pan: fetched.pan || '',
-            segment: fetched.segment || '',
-            nameOfSegment: fetched.nameOfSegment || ''
+            companyCode: fetched.companyCode || "",
+            nameOfCompanyCode: fetched.nameOfCompanyCode || "",
+            shareholdingPercentage: (
+              fetched.shareholdingPercentage ?? ""
+            ).toString(),
+            gstCertificate: fetched.gstCertificate || "",
+            cin: fetched.cin || "",
+            pan: fetched.pan || "",
+            segment: fetched.segment || "",
+            nameOfSegment: fetched.nameOfSegment || "",
           });
           setOriginalData(fetched);
-          setLatestVersion(typeof (fetched as any).version === 'number' ? (fetched as any).version : 0);
+          setLatestVersion(
+            typeof (fetched as any).version === "number"
+              ? (fetched as any).version
+              : 0
+          );
         } catch (e) {
           // Keep inline details if set; otherwise remain as-is
           // eslint-disable-next-line no-console
-          console.error('Error loading existing company details:', e);
+          console.error("Error loading existing company details:", e);
         }
       }
     }
 
     prefill();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [open, reqIdKey, isChangeRequest]);
 
   const resetForm = () => {
     setFormData({
-      companyCode: '',
-      nameOfCompanyCode: '',
-      shareholdingPercentage: '',
-      gstCertificate: '',
-      cin: '',
-      pan: '',
-      segment: '',
-      nameOfSegment: ''
+      companyCode: "",
+      nameOfCompanyCode: "",
+      shareholdingPercentage: "",
+      gstCertificate: "",
+      cin: "",
+      pan: "",
+      segment: "",
+      nameOfSegment: "",
     });
     setOriginalData(null);
     setLatestVersion(null);
   };
 
   const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleFileUpload = (field: string) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.pdf,.jpg,.jpeg,.png';
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".pdf,.jpg,.jpeg,.png";
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
         const reader = new FileReader();
         reader.onload = () => {
-          handleInputChange(field, `${file.name} (uploaded)`);
+          handleInputChange(field, file.name);
+          setAttachmentsDraft((prev) => ({
+            ...prev,
+            [field]: {
+              fileName: file.name,
+              fileType: file.type,
+              dataUrl: String(reader.result),
+            },
+          }));
         };
         reader.readAsDataURL(file);
       }
@@ -173,13 +228,19 @@ export function CompanyCodeForm({
 
   const validateForm = () => {
     const requiredFields = Object.keys(formData);
-    const emptyFields = requiredFields.filter(field => !String((formData as any)[field] ?? '').toString().trim());
-    
+    const emptyFields = requiredFields.filter(
+      (field) =>
+        !String((formData as any)[field] ?? "")
+          .toString()
+          .trim()
+    );
+
     if (emptyFields.length > 0) {
       toast({
         title: "Validation Error",
-        description: "All fields are mandatory. Please fill in all required information.",
-        variant: "destructive"
+        description:
+          "All fields are mandatory. Please fill in all required information.",
+        variant: "destructive",
       });
       return false;
     }
@@ -190,7 +251,7 @@ export function CompanyCodeForm({
       toast({
         title: "Validation Error",
         description: "PEL must hold at least 51% shareholding percentage.",
-        variant: "destructive"
+        variant: "destructive",
       });
       return false;
     }
@@ -221,19 +282,19 @@ export function CompanyCodeForm({
       }
 
       // Determine next version
-      const nextVersion = isChangeRequest ? 1 : ((latestVersion ?? 0) + 1);
+      const nextVersion = isChangeRequest ? 1 : (latestVersion ?? 0) + 1;
 
       const request: Request = {
         requestId,
-        type: 'company',
-        title: isChangeRequest 
+        type: "company",
+        title: isChangeRequest
           ? `Change Request - Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`
           : `Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`,
-        status: 'pending-secretary',
+        status: "pending-secretary",
         createdBy: userEmail,
-        createdAt: isChangeRequest ? now : (anyReq.createdAt || now),
+        createdAt: isChangeRequest ? now : anyReq.createdAt || now,
         updatedAt: now,
-        version: nextVersion
+        version: nextVersion,
       };
 
       const details: CompanyCodeDetails = {
@@ -246,74 +307,117 @@ export function CompanyCodeForm({
         pan: formData.pan,
         segment: formData.segment,
         nameOfSegment: formData.nameOfSegment,
-        version: nextVersion
+        version: nextVersion,
       };
 
       await saveRequest(request);
+      // After: await saveRequest(request); await saveCompanyCodeDetails(details);
+
+      try {
+        const staged = Object.entries(attachmentsDraft);
+        if (staged.length) {
+          await Promise.all(
+            staged.map(([field, f]) =>
+              uploadAttachment({
+                requestId,
+                fileName: f.fileName,
+                fileType: f.fileType,
+                fileContent: f.dataUrl,
+                version: nextVersion,
+                title: ATTACH_TITLES[field] || field,
+                uploadedBy: userEmail,
+              })
+            )
+          );
+          setAttachmentsDraft({});
+        }
+      } catch (e) {
+        console.error("Attachment upload failed:", e);
+      }
+
       await saveCompanyCodeDetails(details);
 
       // Non-critical history
       try {
         if (isChangeRequest && originalData) {
-          const comparison = compareObjects(originalData, formData, 'company');
-          const changesSummary = formatChangesForNotification(comparison.changes);
+          const comparison = compareObjects(originalData, formData, "company");
+          const changesSummary = formatChangesForNotification(
+            comparison.changes
+          );
           await saveHistoryLog({
             requestId,
-            action: 'create',
+            action: "create",
             user: userEmail,
             timestamp: now,
-            metadata: { 
-              type: 'company', 
+            metadata: {
+              type: "company",
               title: request.title,
               isChangeRequest: true,
               originalRequestId: baseId || null,
               changes: comparison.changes,
-              changesSummary
-            }
+              changesSummary,
+            },
           });
         } else {
           if (originalData) {
-            const comparison = compareObjects(originalData, formData, 'company');
-            const changesSummary = formatChangesForNotification(comparison.changes);
+            const comparison = compareObjects(
+              originalData,
+              formData,
+              "company"
+            );
+            const changesSummary = formatChangesForNotification(
+              comparison.changes
+            );
             await saveHistoryLog({
               requestId,
-              action: existingRequest ? 'edit' : 'create',
+              action: existingRequest ? "edit" : "create",
               user: userEmail,
               timestamp: now,
-              metadata: { type: 'company', title: request.title, changes: comparison.changes, changesSummary }
+              metadata: {
+                type: "company",
+                title: request.title,
+                changes: comparison.changes,
+                changesSummary,
+              },
             });
           } else {
             await saveHistoryLog({
               requestId,
-              action: existingRequest ? 'edit' : 'create',
+              action: existingRequest ? "edit" : "create",
               user: userEmail,
               timestamp: now,
-              metadata: { type: 'company', title: request.title }
+              metadata: { type: "company", title: request.title },
             });
           }
         }
       } catch (historyError) {
         // eslint-disable-next-line no-console
-        console.error('Non-critical: failed to write history log', historyError);
+        console.error(
+          "Non-critical: failed to write history log",
+          historyError
+        );
       }
-      
+
       toast({
-        title: isChangeRequest ? "Change Request Created" : (existingRequest ? "Request Updated" : "Request Created"),
-        description: isChangeRequest 
+        title: isChangeRequest
+          ? "Change Request Created"
+          : existingRequest
+          ? "Request Updated"
+          : "Request Created",
+        description: isChangeRequest
           ? "Change request created successfully."
-          : (existingRequest 
-            ? "Your company code request has been updated successfully"
-            : "Your company code request has been created and submitted for approval"),
-        variant: "default"
+          : existingRequest
+          ? "Your company code request has been updated successfully"
+          : "Your company code request has been created and submitted for approval",
+        variant: "default",
       });
 
       onSuccess();
-      
     } catch (error) {
       toast({
         title: "Error",
         description: "Failed to save request. Please try again.",
-        variant: "destructive"
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
@@ -323,7 +427,7 @@ export function CompanyCodeForm({
 
   const renderDetectedChanges = () => {
     if (!originalData) return null;
-    const comparison = compareObjects(originalData, formData, 'company');
+    const comparison = compareObjects(originalData, formData, "company");
     if (!comparison.hasChanges) return null;
     return (
       <div className="mt-2">
@@ -336,12 +440,15 @@ export function CompanyCodeForm({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(o) => {
-      if (!o) {
-        setShowConfirmation(false);
-      }
-      onOpenChange(o);
-    }}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) {
+          setShowConfirmation(false);
+        }
+        onOpenChange(o);
+      }}
+    >
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         {/* Always provide a DialogTitle for a11y; keep it visually hidden */}
         <VisuallyHidden>
@@ -353,26 +460,29 @@ export function CompanyCodeForm({
           <h2 className="text-lg font-semibold leading-none tracking-tight">
             {dialogTitleText}
           </h2>
-          <DialogDescription>
-            {dialogDescriptionText}
-          </DialogDescription>
+          <DialogDescription>{dialogDescriptionText}</DialogDescription>
         </DialogHeader>
 
         {showConfirmation && (
           <Alert>
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
-              {isChangeRequest 
+              {isChangeRequest
                 ? "Are you sure you want to create this change request? It will go through the full approval process."
-                : "Are you sure you want to confirm these changes? This will create a new version of your request."
-              }
+                : "Are you sure you want to confirm these changes? This will create a new version of your request."}
               {renderDetectedChanges()}
             </AlertDescription>
             <div className="flex space-x-2 mt-3">
               <Button size="sm" onClick={handleSubmit} disabled={loading}>
-                {isChangeRequest ? 'Create Change Request' : 'Yes, Confirm Changes'}
+                {isChangeRequest
+                  ? "Create Change Request"
+                  : "Yes, Confirm Changes"}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setShowConfirmation(false)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowConfirmation(false)}
+              >
                 Cancel
               </Button>
             </div>
@@ -386,7 +496,8 @@ export function CompanyCodeForm({
               <span>Company Code Details</span>
             </CardTitle>
             <CardDescription>
-              Expected completion time: 10 days after data received. All fields are mandatory.
+              Expected completion time: 10 days after data received. All fields
+              are mandatory.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -396,33 +507,45 @@ export function CompanyCodeForm({
                 <Input
                   id="companyCode"
                   value={formData.companyCode}
-                  onChange={(e) => handleInputChange('companyCode', e.target.value)}
+                  onChange={(e) =>
+                    handleInputChange("companyCode", e.target.value)
+                  }
                   placeholder="Enter company code"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="nameOfCompanyCode">Name of Company Code *</Label>
+                <Label htmlFor="nameOfCompanyCode">
+                  Name of Company Code *
+                </Label>
                 <Input
                   id="nameOfCompanyCode"
                   value={formData.nameOfCompanyCode}
-                  onChange={(e) => handleInputChange('nameOfCompanyCode', e.target.value)}
+                  onChange={(e) =>
+                    handleInputChange("nameOfCompanyCode", e.target.value)
+                  }
                   placeholder="Enter company code name"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="shareholdingPercentage">Shareholding Percentage (%) *</Label>
+                <Label htmlFor="shareholdingPercentage">
+                  Shareholding Percentage (%) *
+                </Label>
                 <Input
                   id="shareholdingPercentage"
                   type="number"
                   min="51"
                   max="100"
                   value={formData.shareholdingPercentage}
-                  onChange={(e) => handleInputChange('shareholdingPercentage', e.target.value)}
+                  onChange={(e) =>
+                    handleInputChange("shareholdingPercentage", e.target.value)
+                  }
                   placeholder="Min 51% required"
                 />
-                <p className="text-sm text-muted-foreground">PEL must hold at least 51%</p>
+                <p className="text-sm text-muted-foreground">
+                  PEL must hold at least 51%
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -430,7 +553,7 @@ export function CompanyCodeForm({
                 <Input
                   id="segment"
                   value={formData.segment}
-                  onChange={(e) => handleInputChange('segment', e.target.value)}
+                  onChange={(e) => handleInputChange("segment", e.target.value)}
                   placeholder="Enter segment"
                 />
               </div>
@@ -440,7 +563,9 @@ export function CompanyCodeForm({
                 <Input
                   id="nameOfSegment"
                   value={formData.nameOfSegment}
-                  onChange={(e) => handleInputChange('nameOfSegment', e.target.value)}
+                  onChange={(e) =>
+                    handleInputChange("nameOfSegment", e.target.value)
+                  }
                   placeholder="Enter segment name"
                 />
               </div>
@@ -449,11 +574,11 @@ export function CompanyCodeForm({
                 <Label>GST Certificate *</Label>
                 <Button
                   variant="outline"
-                  onClick={() => handleFileUpload('gstCertificate')}
+                  onClick={() => handleFileUpload("gstCertificate")}
                   className="w-full justify-start"
                 >
                   <Upload className="h-4 w-4 mr-2" />
-                  {formData.gstCertificate || 'Upload GST Certificate'}
+                  {formData.gstCertificate || "Upload GST Certificate"}
                 </Button>
               </div>
 
@@ -461,11 +586,11 @@ export function CompanyCodeForm({
                 <Label>CIN *</Label>
                 <Button
                   variant="outline"
-                  onClick={() => handleFileUpload('cin')}
+                  onClick={() => handleFileUpload("cin")}
                   className="w-full justify-start"
                 >
                   <Upload className="h-4 w-4 mr-2" />
-                  {formData.cin || 'Upload CIN'}
+                  {formData.cin || "Upload CIN"}
                 </Button>
               </div>
 
@@ -473,11 +598,11 @@ export function CompanyCodeForm({
                 <Label>PAN *</Label>
                 <Button
                   variant="outline"
-                  onClick={() => handleFileUpload('pan')}
+                  onClick={() => handleFileUpload("pan")}
                   className="w-full justify-start"
                 >
                   <Upload className="h-4 w-4 mr-2" />
-                  {formData.pan || 'Upload PAN'}
+                  {formData.pan || "Upload PAN"}
                 </Button>
               </div>
             </div>
@@ -485,8 +610,14 @@ export function CompanyCodeForm({
             <div className="bg-muted/50 p-4 rounded-lg space-y-2">
               <h4 className="font-medium text-sm">Important Notes:</h4>
               <ul className="text-sm text-muted-foreground space-y-1">
-                <li>• A new company code can only be created if PEL Group holds ≥ 51% Stake in the company</li>
-                <li>• The company code creation will take 10 days from the receipt of an approved request</li>
+                <li>
+                  • A new company code can only be created if PEL Group holds ≥
+                  51% Stake in the company
+                </li>
+                <li>
+                  • The company code creation will take 10 days from the receipt
+                  of an approved request
+                </li>
                 <li>• All fields are mandatory</li>
               </ul>
             </div>
@@ -496,10 +627,13 @@ export function CompanyCodeForm({
                 Cancel
               </Button>
               <Button onClick={handleSubmit} disabled={loading}>
-                {loading 
-                  ? (existingRequest ? 'Updating...' : 'Creating...') 
-                  : (existingRequest ? 'Update Request' : 'Create Request')
-                }
+                {loading
+                  ? existingRequest
+                    ? "Updating..."
+                    : "Creating..."
+                  : existingRequest
+                  ? "Update Request"
+                  : "Create Request"}
               </Button>
             </div>
           </CardContent>
