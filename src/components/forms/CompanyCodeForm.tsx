@@ -26,7 +26,6 @@ import {
   saveRequest,
   saveCompanyCodeDetails,
   saveHistoryLog,
-  generateRequestId,
   getLatestRequestDetails,
   uploadAttachment,
 } from "@/lib/storage";
@@ -92,6 +91,11 @@ export function CompanyCodeForm({
     companyCode: "",
     nameOfCompanyCode: "",
     shareholdingPercentage: "",
+    // ⬇️ new numbers
+    gstNumber: "",
+    cinNumber: "",
+    panNumber: "",
+    // existing attachments/fields
     gstCertificate: "",
     cin: "",
     pan: "",
@@ -127,12 +131,18 @@ export function CompanyCodeForm({
           shareholdingPercentage: (
             inlineDetails.shareholdingPercentage ?? ""
           ).toString(),
+          // ⬇️ new numbers (fallback blank for older rows)
+          gstNumber: (inlineDetails as any).gstNumber || "",
+          cinNumber: (inlineDetails as any).cinNumber || "",
+          panNumber: (inlineDetails as any).panNumber || "",
+          // existing attachment/file-name placeholders (kept)
           gstCertificate: inlineDetails.gstCertificate || "",
           cin: inlineDetails.cin || "",
           pan: inlineDetails.pan || "",
           segment: inlineDetails.segment || "",
           nameOfSegment: inlineDetails.nameOfSegment || "",
         });
+
         setOriginalData(inlineDetails as CompanyCodeDetails);
         setLatestVersion(
           typeof (inlineDetails as any)?.version === "number"
@@ -156,12 +166,18 @@ export function CompanyCodeForm({
             shareholdingPercentage: (
               fetched.shareholdingPercentage ?? ""
             ).toString(),
+            // ⬇️ new numbers (fallback blank for older rows)
+            gstNumber: (fetched as any).gstNumber || "",
+            cinNumber: (fetched as any).cinNumber || "",
+            panNumber: (fetched as any).panNumber || "",
+            // existing attachment/file-name placeholders (kept)
             gstCertificate: fetched.gstCertificate || "",
             cin: fetched.cin || "",
             pan: fetched.pan || "",
             segment: fetched.segment || "",
             nameOfSegment: fetched.nameOfSegment || "",
           });
+
           setOriginalData(fetched);
           setLatestVersion(
             typeof (fetched as any).version === "number"
@@ -187,12 +203,16 @@ export function CompanyCodeForm({
       companyCode: "",
       nameOfCompanyCode: "",
       shareholdingPercentage: "",
+      gstNumber: "",
+      cinNumber: "",
+      panNumber: "",
       gstCertificate: "",
       cin: "",
       pan: "",
       segment: "",
       nameOfSegment: "",
     });
+
     setOriginalData(null);
     setLatestVersion(null);
   };
@@ -274,34 +294,56 @@ export function CompanyCodeForm({
 
       const anyReq: any = existingRequest || {};
       const baseId = anyReq.requestId || anyReq.id;
-      let requestId = baseId || generateRequestId();
-
-      // For change requests, use a fresh request id
-      if (isChangeRequest) {
-        requestId = generateRequestId();
-      }
 
       // Determine next version
       const nextVersion = isChangeRequest ? 1 : (latestVersion ?? 0) + 1;
 
-      const request: Request = {
-        requestId,
-        type: "company",
-        title: isChangeRequest
-          ? `Change Request - Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`
-          : `Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`,
-        status: "pending-secretary",
-        createdBy: userEmail,
-        createdAt: isChangeRequest ? now : anyReq.createdAt || now,
-        updatedAt: now,
-        version: nextVersion,
-      };
+      // Create/Update request first to get the server-generated ID
+      let requestId: string;
+      const title = isChangeRequest
+        ? `Change Request - Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`
+        : `Company Code: ${formData.companyCode} - ${formData.nameOfCompanyCode}`;
+
+      if (existingRequest && !isChangeRequest) {
+        requestId = String(baseId);
+        await saveRequest({
+          requestId,
+          type: "company",
+          title,
+          status: "pending-secretary",
+          createdBy: userEmail,
+          createdAt: anyReq.createdAt || now,
+          updatedAt: now,
+        } as any);
+      } else {
+        const created: any = await saveRequest({
+          // omit requestId to force server-side id generation
+          type: "company",
+          title,
+          status: "pending-secretary",
+          createdBy: userEmail,
+          ncType: isChangeRequest ? "C" : "N",
+          createdAt: now,
+          updatedAt: now,
+        } as any);
+        requestId =
+          created?.requestId ??
+          created?.data?.requestId ??
+          created?.data?.data?.requestId;
+      }
+
+      if (!requestId) throw new Error("Missing server-generated requestId");
 
       const details: CompanyCodeDetails = {
         requestId,
         companyCode: formData.companyCode,
         nameOfCompanyCode: formData.nameOfCompanyCode,
         shareholdingPercentage: parseFloat(formData.shareholdingPercentage),
+        // ⬇️ new numbers
+        gstNumber: formData.gstNumber,
+        cinNumber: formData.cinNumber,
+        panNumber: formData.panNumber,
+        // existing
         gstCertificate: formData.gstCertificate,
         cin: formData.cin,
         pan: formData.pan,
@@ -309,9 +351,6 @@ export function CompanyCodeForm({
         nameOfSegment: formData.nameOfSegment,
         version: nextVersion,
       };
-
-      await saveRequest(request);
-      // After: await saveRequest(request); await saveCompanyCodeDetails(details);
 
       try {
         const staged = Object.entries(attachmentsDraft);
@@ -351,7 +390,7 @@ export function CompanyCodeForm({
             timestamp: now,
             metadata: {
               type: "company",
-              title: request.title,
+              title: title,
               isChangeRequest: true,
               originalRequestId: baseId || null,
               changes: comparison.changes,
@@ -375,7 +414,7 @@ export function CompanyCodeForm({
               timestamp: now,
               metadata: {
                 type: "company",
-                title: request.title,
+                title: title,
                 changes: comparison.changes,
                 changesSummary,
               },
@@ -386,7 +425,7 @@ export function CompanyCodeForm({
               action: existingRequest ? "edit" : "create",
               user: userEmail,
               timestamp: now,
-              metadata: { type: "company", title: request.title },
+              metadata: { type: "company", title},
             });
           }
         }
@@ -449,7 +488,7 @@ export function CompanyCodeForm({
         onOpenChange(o);
       }}
     >
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[90vw] max-w-[90vw] max-h-[90vh] overflow-y-auto">
         {/* Always provide a DialogTitle for a11y; keep it visually hidden */}
         <VisuallyHidden>
           <DialogTitle>{dialogTitleText}</DialogTitle>
@@ -506,11 +545,17 @@ export function CompanyCodeForm({
                 <Label htmlFor="companyCode">Company Code *</Label>
                 <Input
                   id="companyCode"
+                  inputMode="numeric"
+                  pattern="\d*"
                   value={formData.companyCode}
                   onChange={(e) =>
-                    handleInputChange("companyCode", e.target.value)
+                    handleInputChange(
+                      "companyCode",
+                      e.target.value.replace(/\D/g, "")
+                    )
                   }
                   placeholder="Enter company code"
+                  disabled={isChangeRequest}
                 />
               </div>
 
@@ -528,7 +573,7 @@ export function CompanyCodeForm({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2 col-span-full">
                 <Label htmlFor="shareholdingPercentage">
                   Shareholding Percentage (%) *
                 </Label>
@@ -549,7 +594,7 @@ export function CompanyCodeForm({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="segment">Segment *</Label>
+                <Label htmlFor="segment">Segment Code *</Label>
                 <Input
                   id="segment"
                   value={formData.segment}
@@ -571,6 +616,18 @@ export function CompanyCodeForm({
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="gstNumber">GST Number *</Label>
+                <Input
+                  id="gstNumber"
+                  value={formData.gstNumber}
+                  onChange={(e) =>
+                    handleInputChange("gstNumber", e.target.value.trim())
+                  }
+                  placeholder="Enter GSTIN (e.g., 22AAAAA0000A1Z5)"
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label>GST Certificate *</Label>
                 <Button
                   variant="outline"
@@ -583,6 +640,18 @@ export function CompanyCodeForm({
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="cinNumber">CIN Number *</Label>
+                <Input
+                  id="cinNumber"
+                  value={formData.cinNumber}
+                  onChange={(e) =>
+                    handleInputChange("cinNumber", e.target.value.trim())
+                  }
+                  placeholder="Enter 21-character CIN"
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label>CIN *</Label>
                 <Button
                   variant="outline"
@@ -592,6 +661,18 @@ export function CompanyCodeForm({
                   <Upload className="h-4 w-4 mr-2" />
                   {formData.cin || "Upload CIN"}
                 </Button>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="panNumber">PAN Number *</Label>
+                <Input
+                  id="panNumber"
+                  value={formData.panNumber}
+                  onChange={(e) =>
+                    handleInputChange("panNumber", e.target.value.trim())
+                  }
+                  placeholder="Enter 10-character PAN"
+                />
               </div>
 
               <div className="space-y-2">

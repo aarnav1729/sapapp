@@ -121,10 +121,10 @@ export function UserManagement() {
     const roleMap = {
       'requestor': 'Requestor',
       'it': 'IT Team',
-      'secretary': 'Secretary',
-      'finance': 'Finance',
-      'raghu': 'Raghu',
-      'siva': 'Siva',
+      'secretary': "Secretarial",
+      'siva': "Finance Approver 1",
+      'raghu': "Finance Approver 2",
+      'manoj': "Finance Approver 3",
       'admin': 'Administrator'
     };
     return roleMap[role as keyof typeof roleMap] || role;

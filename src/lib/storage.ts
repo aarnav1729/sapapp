@@ -38,6 +38,7 @@ export interface Request {
 export interface PlantCodeDetails {
   requestId: string;
   companyCode: string;
+  gstNumber: string;
   gstCertificate: string;
   plantCode: string;
   nameOfPlant: string;
@@ -62,6 +63,11 @@ export interface CompanyCodeDetails {
   companyCode: string;
   nameOfCompanyCode: string;
   shareholdingPercentage: number;
+  // ⬇️ new numbers
+  gstNumber: string;
+  cinNumber: string;
+  panNumber: string;
+  // existing fields
   gstCertificate: string;
   cin: string;
   pan: string;
@@ -271,10 +277,13 @@ export const deleteUser = async (email: string): Promise<void> => {
    Requests
    ================================ */
 
-export async function saveRequest(request: Request) {
+export async function saveRequest(
+  request: Partial<Request> & { ncType?: "N" | "C" }
+): Promise<{ requestId: string }> {
   await initDB();
-  // server generates/updates updatedAt; keep compatibility
-  await http<{ requestId: string }>("/api/requests", {
+
+  // server generates/updates updatedAt; return the generated id
+  return await http<{ requestId: string }>("/api/requests", {
     method: "POST",
     body: JSON.stringify({
       requestId: request.requestId,
@@ -284,6 +293,7 @@ export async function saveRequest(request: Request) {
       createdBy: request.createdBy,
       createdAt: request.createdAt || toISO(),
       updatedAt: request.updatedAt || toISO(),
+      ...(request.ncType ? { ncType: request.ncType } : {}), // allow N/C id prefixing
     }),
   });
 }

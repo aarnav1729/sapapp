@@ -1,11 +1,3 @@
-/**
- * server/server.cjs
- * Production-ready Express + MSSQL backend for PEL Workflow (sapapp).
- * - Creates tables on startup (idempotent).
- * - Exposes REST endpoints for users, requests, details, approvals, attachments, history, analytics.
- * - OTP login via separate SPOT DB (EMP + OTP table); email via Microsoft Graph.
- * - Serves frontend + API on a single HTTPS port.
- */
 require("dotenv").config();
 
 const express = require("express");
@@ -46,31 +38,259 @@ const graphClient = Client.initWithMiddleware({
   },
 });
 
-async function sendEmail(toEmail, subject, htmlContent) {
-  const toList = Array.isArray(toEmail)
-    ? toEmail
-    : String(toEmail || "")
-        .split(/[;,]/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
+async function sendEmail(toEmail, subject, htmlContent, opts = {}) {
+  const asList = (v) =>
+    Array.isArray(v)
+      ? v
+      : String(v || "")
+          .split(/[;,]/)
+          .map((s) => s.trim())
+          .filter(Boolean);
   const normalize = (x) => {
     if (!x) return null;
     const s = String(x).trim();
     return s.includes("@") ? s : `${s}@premierenergies.com`;
   };
-  const normalized = toList.map(normalize).filter(Boolean);
+  const toNormalized = asList(toEmail).map(normalize).filter(Boolean);
+  const ccNormalized = asList(opts.cc).map(normalize).filter(Boolean);
+  const attachments = Array.isArray(opts.attachments) ? opts.attachments : [];
 
   const message = {
     subject,
     body: { contentType: "HTML", content: htmlContent },
-    toRecipients: normalized.map((addr) => ({
-      emailAddress: { address: addr },
+    toRecipients: toNormalized.map((address) => ({
+      emailAddress: { address },
     })),
+    ...(ccNormalized.length
+      ? {
+          ccRecipients: ccNormalized.map((address) => ({
+            emailAddress: { address },
+          })),
+        }
+      : {}),
+    ...(attachments.length ? { attachments } : {}),
   };
-  await graphClient
-    .api(`/users/${SENDER_EMAIL}/sendMail`)
-    .post({ message, saveToSentItems: true });
+  await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+    message,
+    saveToSentItems: true,
+  });
+}
+
+/* ------------------------------- CCAS emails ------------------------------- */
+const APP_NAME = "CCAS";
+
+/** role -> email (dbo.Users) */
+async function getUserEmailByRole(role) {
+  const pool = await getSapPool();
+  const rs = await pool
+    .request()
+    .input("r", sql.NVarChar(20), role)
+    .query("SELECT TOP 1 email FROM dbo.Users WHERE role=@r");
+  return rs.recordset[0]?.email || null;
+}
+
+function headerBanner(title) {
+  return `
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#0078D4;padding:16px 0;">
+  <tr><td align="center">
+    <div style="color:#fff;font-family:Arial,sans-serif;">
+      <div style="font-size:22px;font-weight:700;margin-bottom:2px;">${title}</div>
+      <div style="font-size:12px;opacity:.85;">${APP_NAME} Workflow</div>
+    </div>
+  </td></tr>
+</table>`;
+}
+
+function kvTable(pairs) {
+  return `
+<table cellpadding="10" cellspacing="0" border="1" style="border-collapse:collapse;width:100%;background-color:#fff;margin-top:12px;">
+  <tr style="background:#0078D4;color:#fff;">
+    <th align="left">Field</th><th align="left">Value</th>
+  </tr>
+  ${pairs
+    .map(
+      ([k, v], i) =>
+        `<tr style="background:${i % 2 ? "#f7f7f7" : "#ffffff"};">
+           <td><strong>${k}</strong></td><td>${v ?? ""}</td>
+         </tr>`
+    )
+    .join("")}
+</table>`;
+}
+
+/** Load request + latest details + requester email */
+async function getRequestBundle(requestId) {
+  const pool = await getSapPool();
+  const reqRs = await pool
+    .request()
+    .input("id", sql.NVarChar(36), requestId)
+    .query("SELECT * FROM dbo.Requests WHERE requestId=@id");
+  const req = reqRs.recordset[0];
+  if (!req) return null;
+
+  let details = null;
+  if (req.type === "plant") {
+    const d = await pool.request().input("id", sql.NVarChar(36), requestId)
+      .query(`
+        SELECT TOP 1 * FROM dbo.PlantCodeDetails
+        WHERE requestId=@id ORDER BY version DESC`);
+    details = d.recordset[0] || null;
+  } else {
+    const d = await pool.request().input("id", sql.NVarChar(36), requestId)
+      .query(`
+        SELECT TOP 1 * FROM dbo.CompanyCodeDetails
+        WHERE requestId=@id ORDER BY version DESC`);
+    details = d.recordset[0] || null;
+  }
+
+  return { request: req, details };
+}
+
+/** Read attachments and convert for Microsoft Graph */
+async function getGraphFileAttachments(requestId) {
+  const pool = await getSapPool();
+  const rs = await pool
+    .request()
+    .input("id", sql.NVarChar(36), requestId)
+    .query(
+      `SELECT fileName, fileType, fileContent
+         FROM dbo.Attachments
+        WHERE requestId=@id
+        ORDER BY uploadedAt ASC`
+    );
+  return rs.recordset.map((r) => ({
+    "@odata.type": "#microsoft.graph.fileAttachment",
+    name: r.fileName,
+    contentType: r.fileType,
+    contentBytes: Buffer.from(r.fileContent).toString("base64"),
+  }));
+}
+
+/** Build a details table for the current request (company/plant aware) */
+function buildDetailsTable(req, details) {
+  const head = [
+    ["Request ID", req.requestId],
+    ["Title", req.title],
+    ["Type", req.type],
+    ["Current Status", req.status],
+    ["Created By", req.createdBy],
+    ["Created At", new Date(req.createdAt).toLocaleString()],
+  ];
+
+  const bodyPairs =
+    req.type === "plant"
+      ? [
+          ["Company Code", details?.companyCode],
+          ["Plant Code", details?.plantCode],
+          ["Name of Plant", details?.nameOfPlant],
+          ["Address of Plant", details?.addressOfPlant],
+          ["Purchase Org.", details?.purchaseOrganization],
+          ["Sales Org.", details?.salesOrganization],
+          ["Profit Center", details?.profitCenter],
+          ["Cost Centers", details?.costCenters],
+          ["Project Code", details?.projectCode],
+          ["Storage Location", details?.storageLocationCode],
+        ]
+      : [
+          ["Company Code", details?.companyCode],
+          ["Company Name", details?.nameOfCompanyCode],
+          ["Shareholding %", details?.shareholdingPercentage],
+          ["Segment", details?.segment],
+          ["CIN No.", details?.cinNumber],
+          ["PAN No.", details?.panNumber],
+          ["GST No.", details?.gstNumber],
+        ];
+
+  return kvTable([
+    ...head,
+    ...bodyPairs.filter(([, v]) => v != null && v !== ""),
+  ]);
+}
+
+/** Confirmation mail to requestor incl. attachments (cc requestor) */
+async function sendConfirmationEmail(requestId) {
+  const bundle = await getRequestBundle(requestId);
+  if (!bundle) return;
+  const { request, details } = bundle;
+  const attachments = await getGraphFileAttachments(requestId);
+
+  const html = `
+<div style="font-family:Arial,sans-serif;color:#333;line-height:1.45;">
+  ${headerBanner("🆕 Submission Confirmation")}
+  <div style="padding:20px;background:#f9f9f9;max-width:760px;margin:0 auto;">
+    <p style="margin:0 0 10px;">Hello <strong>${request.createdBy}</strong>,</p>
+    <p style="margin:0 0 14px;">
+      Your ${APP_NAME} request has been received. The details are below. Any files you uploaded are attached to this email.
+    </p>
+    ${buildDetailsTable(request, details)}
+    <p style="font-size:12px;color:#666;margin-top:16px;">
+      This is an automated message from ${APP_NAME}. For help, contact IT.
+    </p>
+    <p style="margin-top:18px;">Regards,<br/><strong>Team ${APP_NAME}</strong></p>
+  </div>
+</div>`;
+
+  await sendEmail(
+    request.createdBy,
+    `${APP_NAME}: Request ${request.requestId} submitted`,
+    html,
+    { cc: request.createdBy, attachments }
+  );
+}
+
+/** Stage mail (pending-* → next approver; sap-updated → IT). Always CC requestor. */
+async function sendStageEmail(requestId, newStatus) {
+  const bundle = await getRequestBundle(requestId);
+  if (!bundle) return;
+  const { request, details } = bundle;
+
+  const statusToRole = {
+    "pending-secretary": "secretary",
+    "pending-siva": "siva",
+    "pending-raghu": "raghu",
+    "pending-manoj": "manoj",
+    "sap-updated": "it",
+  };
+  const role = statusToRole[newStatus];
+  if (!role) return;
+
+  const to = await getUserEmailByRole(role);
+  if (!to) return;
+
+  const titles = {
+    "pending-secretary": "Approval Needed (Secretarial)",
+    "pending-siva": "Approval Needed (Finance Approver 1)",
+    "pending-raghu": "Approval Needed (Finance Approver 2)",
+    "pending-manoj": "Approval Needed (Finance Approver 3)",
+    "sap-updated": "Request Marked as Updated in SAP",
+  };
+  const subjectBase =
+    newStatus === "sap-updated"
+      ? `${APP_NAME}: Request ${request.requestId} marked as updated in SAP`
+      : `${APP_NAME}: Request ${request.requestId} awaiting your action`;
+
+  const html = `
+<div style="font-family:Arial,sans-serif;color:#333;line-height:1.45;">
+  ${headerBanner(`📣 ${titles[newStatus] || "Action Needed"}`)}
+  <div style="padding:20px;background:#f9f9f9;max-width:760px;margin:0 auto;">
+    <p style="margin:0 0 10px;">Hello,</p>
+    <p style="margin:0 0 14px;">
+      The following request is now <strong>${
+        request.status
+      }</strong> and requires your attention.
+    </p>
+    ${buildDetailsTable(request, details)}
+    <p style="margin-top:16px;">
+      Open ${APP_NAME}: <a href="${`https://code.premierenergies.com:14443`}" style="color:#0078D4;text-decoration:none;">View Request</a>
+    </p>
+    <p style="font-size:12px;color:#666;margin-top:16px;">
+      The requestor has been CC’d on this email.
+    </p>
+    <p style="margin-top:18px;">Thanks &amp; Regards,<br/><strong>Team ${APP_NAME}</strong></p>
+  </div>
+</div>`;
+
+  await sendEmail(to, subjectBase, html, { cc: request.createdBy });
 }
 
 /* ------------------------------ App & Middleware ---------------------------- */
@@ -163,6 +383,32 @@ const normalizeToEmail = (raw) => {
   if (!s) return s;
   return s.includes("@") ? s : `${s}@premierenergies.com`;
 };
+
+// Generate requestId as N/C_DDMMYYYY_### with a per-day, per-prefix counter
+async function generateRequestId(ncType = "N") {
+  const prefix = String(ncType || "N").toUpperCase() === "C" ? "C" : "N";
+  const pool = await getSapPool();
+
+  const rs = await pool.request().input("prefix", sql.NChar(1), prefix).query(`
+    DECLARE @d CHAR(8) = CONVERT(CHAR(8), GETDATE(), 112); -- yyyymmdd (server local time)
+    MERGE [dbo].[RequestIdCounters] WITH (HOLDLOCK) AS t
+    USING (SELECT @d AS yyyymmdd, @prefix AS prefix) AS s
+      ON t.prefix = s.prefix AND t.yyyymmdd = s.yyyymmdd
+    WHEN MATCHED THEN UPDATE SET t.lastSeq = t.lastSeq + 1
+    WHEN NOT MATCHED THEN INSERT(prefix, yyyymmdd, lastSeq) VALUES(s.prefix, s.yyyymmdd, 1)
+    OUTPUT inserted.lastSeq AS nextSeq, s.yyyymmdd AS yyyymmdd;
+  `);
+
+  const row = rs.recordset[0];
+  const yyyymmdd = row.yyyymmdd; // e.g. 20250903
+  const ddmmyyyy = `${yyyymmdd.slice(6, 8)}${yyyymmdd.slice(
+    4,
+    6
+  )}${yyyymmdd.slice(0, 4)}`;
+  const seq = String(row.nextSeq).padStart(3, "0"); // 001..999
+
+  return `${prefix}_${ddmmyyyy}_${seq}`;
+}
 
 /* ------------------------- Schema Bootstrap (sapapp) ------------------------ */
 const DDL = `
@@ -310,55 +556,56 @@ BEGIN
   );
   CREATE INDEX IX_History_RequestId ON [dbo].[HistoryLogs]([requestId]);
 END;
+
+-- RequestIdCounters (per-day sequence per prefix)
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[RequestIdCounters]') AND type in (N'U'))
+BEGIN
+  CREATE TABLE [dbo].[RequestIdCounters](
+    [prefix]   NCHAR(1)  NOT NULL,
+    [yyyymmdd] CHAR(8)   NOT NULL,
+    [lastSeq]  INT       NOT NULL CONSTRAINT DF_RequestIdCounters_lastSeq DEFAULT(0),
+    CONSTRAINT PK_RequestIdCounters PRIMARY KEY ([prefix],[yyyymmdd])
+  );
+END;
 `;
 
 async function ensureSapSchemaAndSeed() {
   const pool = await getSapPool();
   await pool.request().batch(DDL);
-
-  // Seed default users (idempotent)
-  const defaults = [
-    { email: "it@pel.com", role: "it" },
-    { email: "sec@pel.com", role: "secretary" },
-    { email: "manoj@pel.com", role: "manoj" },
-    { email: "raghu@pel.com", role: "raghu" },
-    { email: "siva@pel.com", role: "siva" },
-    { email: "admin@pel.com", role: "admin" },
-  ];
-  for (const u of defaults) {
-    await pool
-      .request()
-      .input("email", sql.NVarChar(256), u.email)
-      .input("role", sql.NVarChar(20), u.role).query(`
-        IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE email=@email)
-          INSERT INTO dbo.Users(email, role) VALUES(@email, @role);
-      `);
-  }
+  // Seeding removed intentionally.
 }
 
 /* ------------------------------ SPOT OTP Table ------------------------------ */
-const OTP_TABLE = "AuditPortalLogin"; // as in your other project
+const OTP_TABLE = "CCASLogin";
 
 async function ensureSpotOtpTable() {
   const pool = await getSpotPool();
-  const loginTableCheck = `
-    IF NOT EXISTS (
-        SELECT 1
-          FROM sys.tables t
-          JOIN sys.schemas s ON t.schema_id = s.schema_id
-         WHERE t.name = '${OTP_TABLE}'
-           AND s.name = 'dbo'
-    )
-    BEGIN
-        CREATE TABLE dbo.${OTP_TABLE} (
-          Username    NVARCHAR(255) NOT NULL PRIMARY KEY,
-          OTP         NVARCHAR(10)  NULL,
-          OTP_Expiry  DATETIME2     NULL,
-          LEmpID      NVARCHAR(50)  NULL
-        );
-    END;
-  `;
-  await pool.request().query(loginTableCheck);
+  const sqlText = `
+DECLARE @tbl sysname = N'${OTP_TABLE}';
+
+IF NOT EXISTS (
+    SELECT 1
+      FROM sys.tables t
+      JOIN sys.schemas s ON s.schema_id = t.schema_id
+     WHERE t.name = @tbl
+       AND s.name = 'dbo'
+)
+BEGIN
+    -- Create only when table is absent
+    CREATE TABLE [dbo].[${OTP_TABLE}](
+      [Username]    NVARCHAR(255) NOT NULL PRIMARY KEY,
+      [OTP]         NVARCHAR(10)  NULL,
+      [OTP_Expiry]  DATETIME2(3)  NULL,
+      [LEmpID]      NVARCHAR(50)  NULL
+    );
+
+    -- ⬇️ If you ever need initial seed rows, put them here so they run ONLY on first create.
+    -- Example (currently disabled):
+    -- INSERT INTO [dbo].[${OTP_TABLE}] (Username, LEmpID)
+    -- SELECT EmpEmail, EmpID FROM dbo.EMP WHERE ActiveFlag = 1;
+END;
+`;
+  await pool.request().batch(sqlText);
 }
 
 /* --------------------------------- Health ---------------------------------- */
@@ -381,6 +628,13 @@ app.post("/api/send-otp", async (req, res) => {
     const rawEmail = (req.body.email || "").trim();
     const fullEmail = normalizeToEmail(rawEmail);
 
+    // Only allow company accounts
+    if (!fullEmail.endsWith("@premierenergies.com")) {
+      return res
+        .status(403)
+        .json({ message: "Only @premierenergies.com accounts are allowed." });
+    }
+
     const pool = await getSpotPool();
     const empQ = await pool.request().input("em", sql.NVarChar(255), fullEmail)
       .query(`
@@ -401,7 +655,7 @@ app.post("/api/send-otp", async (req, res) => {
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     const expiry = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    // Upsert OTP into dbo.AuditPortalLogin (SPOT)
+    // Upsert OTP into dbo.CCASLogin (SPOT)
     await pool
       .request()
       .input("u", sql.NVarChar(255), fullEmail)
@@ -414,13 +668,21 @@ app.post("/api/send-otp", async (req, res) => {
           INSERT INTO dbo.${OTP_TABLE} (Username, OTP, OTP_Expiry, LEmpID) VALUES (@u, @o, @exp, @emp);
       `);
 
-    const subject = "PEL Workflow – Your OTP";
+    // CCAS-branded email (same format as reference; app name switched)
+    const subject = "CCAS: One-Time Password";
     const content = `
-      <p>Welcome to the PEL Workflow Portal.</p>
-      <p>Your One-Time Password (OTP) is: <strong>${otp}</strong></p>
-      <p>This OTP will expire in 5 minutes.</p>
-      <p>Thanks &amp; Regards,<br/>PEL Workflow</p>
-    `;
+            <div style="font-family:Arial;color:#333;line-height:1.5;">
+              <h2 style="color:#0052cc;margin-bottom:.5em;">Welcome to Code Creation Approval System  Application!</h2>
+              <p>Your one-time password (OTP) is:</p>
+              <p style="font-size:24px;font-weight:bold;color:#0052cc;">${otp}</p>
+              <p>This code expires in <strong>5 minutes</strong>.</p>
+              <hr style="border:none;border-top:1px solid #eee;margin:2em 0;">
+              <p style="font-size:12px;color:#777;">
+                If you didn’t request this, ignore this email.<br>
+                Need help? contact <a href="mailto:aarnav.singh@premierenergies.com">support</a>.
+              </p>
+              <p style="margin-top:2em;">Regards,<br/><strong>Team CCAS</strong></p>
+            </div>`;
     try {
       await sendEmail(fullEmail, subject, content);
       return res.status(200).json({ message: "OTP sent successfully" });
@@ -440,6 +702,13 @@ app.post("/api/verify-otp", async (req, res) => {
     const rawEmail = (req.body.email || "").trim();
     const fullEmail = normalizeToEmail(rawEmail);
     const otp = (req.body.otp || "").trim();
+
+    // Only allow company accounts
+    if (!fullEmail.endsWith("@premierenergies.com")) {
+      return res
+        .status(403)
+        .json({ message: "Only @premierenergies.com accounts are allowed." });
+    }
 
     const pool = await getSpotPool();
     const rs = await pool
@@ -583,13 +852,30 @@ app.get("/api/requests/:id", async (req, res) => {
 
 app.post("/api/requests", async (req, res) => {
   try {
-    let { requestId, type, title, status, createdBy, createdAt, updatedAt } =
-      req.body;
+    let {
+      requestId,
+      type,
+      title,
+      status,
+      createdBy,
+      createdAt,
+      updatedAt,
+      ncType,
+    } = req.body;
+
     if (!type || !title || !status || !createdBy) {
       return fail(res, 400, "type, title, status, createdBy are required");
     }
-    requestId = requestId || uuidv4();
+    requestId = requestId || (await generateRequestId(ncType)); // ncType: "N" or "C"
+
     const pool = await getSapPool();
+    // Was this request already there? (to compare status)
+    const prevRs = await pool
+      .request()
+      .input("rid", sql.NVarChar(36), requestId)
+      .query("SELECT TOP 1 status FROM dbo.Requests WHERE requestId=@rid");
+    const prevStatus = prevRs.recordset[0]?.status || null;
+
     const r = pool
       .request()
       .input("requestId", sql.NVarChar(36), requestId)
@@ -621,6 +907,13 @@ app.post("/api/requests", async (req, res) => {
         VALUES(@requestId, @type, @title, @status, @createdBy, ISNULL(@createdAt, SYSUTCDATETIME()), ISNULL(@updatedAt, SYSUTCDATETIME()));
       END
     `);
+    try {
+      if (prevStatus !== status) {
+        await sendStageEmail(requestId, status);
+      }
+    } catch (e) {
+      console.error("sendStageEmail (create) failed:", e);
+    }
     ok(res, { requestId });
   } catch (err) {
     fail(res, 500, "Failed to save request", err.message);
@@ -640,6 +933,12 @@ app.patch("/api/requests/:id/status", async (req, res) => {
         SET status=@status, updatedAt=SYSUTCDATETIME()
         WHERE requestId=@id;
       `);
+    // NEW: notify next approver (or IT for sap-updated). Always CC requestor.
+    try {
+      await sendStageEmail(req.params.id, status);
+    } catch (e) {
+      console.error("sendStageEmail failed:", e);
+    }
     ok(res, { requestId: req.params.id, status });
   } catch (err) {
     fail(res, 500, "Failed to update status", err.message);
@@ -670,6 +969,7 @@ app.post("/api/plant-details", async (req, res) => {
       else if (
         [
           "companyCode",
+          "gstNumber",
           "plantCode",
           "nameOfPlant",
           "addressOfPlant",
@@ -697,6 +997,7 @@ app.post("/api/plant-details", async (req, res) => {
         BEGIN
           UPDATE dbo.PlantCodeDetails
           SET companyCode=@companyCode,
+              gstNumber=@gstNumber,
               gstCertificate=@gstCertificate,
               plantCode=@plantCode,
               nameOfPlant=@nameOfPlant,
@@ -718,18 +1019,25 @@ app.post("/api/plant-details", async (req, res) => {
         ELSE
         BEGIN
           INSERT INTO dbo.PlantCodeDetails(
-            requestId, version, companyCode, gstCertificate, plantCode, nameOfPlant, addressOfPlant,
+            requestId, version, companyCode, gstNumber, gstCertificate, plantCode, nameOfPlant, addressOfPlant,
             purchaseOrganization, nameOfPurchaseOrganization, salesOrganization, nameOfSalesOrganization,
             profitCenter, nameOfProfitCenter, costCenters, nameOfCostCenters, projectCode, projectCodeDescription,
             storageLocationCode, storageLocationDescription
           ) VALUES (
-            @requestId, @version, @companyCode, @gstCertificate, @plantCode, @nameOfPlant, @addressOfPlant,
+            @requestId, @version, @companyCode, @gstNumber, @gstCertificate, @plantCode, @nameOfPlant, @addressOfPlant,
             @purchaseOrganization, @nameOfPurchaseOrganization, @salesOrganization, @nameOfSalesOrganization,
             @profitCenter, @nameOfProfitCenter, @costCenters, @nameOfCostCenters, @projectCode, @projectCodeDescription,
             @storageLocationCode, @storageLocationDescription
           );
         END
       `);
+
+    // NEW: CCAS confirmation email to requestor with attachments
+    try {
+      await sendConfirmationEmail(d.requestId);
+    } catch (e) {
+      console.error("sendConfirmationEmail (plant) failed:", e);
+    }
 
     ok(res, { requestId: d.requestId, version: Number(d.version) });
   } catch (err) {
@@ -802,6 +1110,11 @@ app.post("/api/company-details", async (req, res) => {
         d.nameOfCompanyCode ?? null
       )
       .input("shareholdingPercentage", sql.Decimal(5, 2), sharePct)
+      // ⬇️ new numbers
+      .input("gstNumber", sql.NVarChar(sql.MAX), d.gstNumber ?? null)
+      .input("cinNumber", sql.NVarChar(sql.MAX), d.cinNumber ?? null)
+      .input("panNumber", sql.NVarChar(sql.MAX), d.panNumber ?? null)
+      // existing attachments/fields
       .input("gstCertificate", sql.NVarChar(sql.MAX), d.gstCertificate ?? null)
       .input("cin", sql.NVarChar(sql.MAX), d.cin ?? null)
       .input("pan", sql.NVarChar(sql.MAX), d.pan ?? null)
@@ -811,26 +1124,42 @@ app.post("/api/company-details", async (req, res) => {
     await r.query(`
         IF EXISTS (SELECT 1 FROM dbo.CompanyCodeDetails WHERE requestId=@requestId AND version=@version)
         BEGIN
-          UPDATE dbo.CompanyCodeDetails
-          SET companyCode=@companyCode,
-              nameOfCompanyCode=@nameOfCompanyCode,
-              shareholdingPercentage=@shareholdingPercentage,
-              gstCertificate=@gstCertificate,
-              cin=@cin,
-              pan=@pan,
-              segment=@segment,
-              nameOfSegment=@nameOfSegment
-          WHERE requestId=@requestId AND version=@version;
+        UPDATE dbo.CompanyCodeDetails
+        SET companyCode=@companyCode,
+            nameOfCompanyCode=@nameOfCompanyCode,
+            shareholdingPercentage=@shareholdingPercentage,
+            gstNumber=@gstNumber,
+            cinNumber=@cinNumber,
+            panNumber=@panNumber,
+            gstCertificate=@gstCertificate,
+            cin=@cin,
+            pan=@pan,
+            segment=@segment,
+            nameOfSegment=@nameOfSegment
+        WHERE requestId=@requestId AND version=@version;
+
         END
         ELSE
         BEGIN
-          INSERT INTO dbo.CompanyCodeDetails(
-            requestId, version, companyCode, nameOfCompanyCode, shareholdingPercentage, gstCertificate, cin, pan, segment, nameOfSegment
-          ) VALUES (
-            @requestId, @version, @companyCode, @nameOfCompanyCode, @shareholdingPercentage, @gstCertificate, @cin, @pan, @segment, @nameOfSegment
-          );
+        INSERT INTO dbo.CompanyCodeDetails(
+          requestId, version, companyCode, nameOfCompanyCode, shareholdingPercentage,
+          gstNumber, cinNumber, panNumber,
+          gstCertificate, cin, pan, segment, nameOfSegment
+        ) VALUES (
+          @requestId, @version, @companyCode, @nameOfCompanyCode, @shareholdingPercentage,
+          @gstNumber, @cinNumber, @panNumber,
+          @gstCertificate, @cin, @pan, @segment, @nameOfSegment
+        );
+
         END
       `);
+
+    // NEW: CCAS confirmation email to requestor with attachments
+    try {
+      await sendConfirmationEmail(d.requestId);
+    } catch (e) {
+      console.error("sendConfirmationEmail (company) failed:", e);
+    }
 
     ok(res, { requestId: d.requestId, version: Number(d.version) });
   } catch (err) {

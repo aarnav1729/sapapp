@@ -75,8 +75,10 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
   const [masterCompanies, setMasterCompanies] = useState<any[]>([]);
   const [plantSearch, setPlantSearch] = useState("");
   const [companySearch, setCompanySearch] = useState("");
-  const [selectedPlantMasterKey, setSelectedPlantMasterKey] = useState<string>("");
-  const [selectedCompanyMasterKey, setSelectedCompanyMasterKey] = useState<string>("");
+  const [selectedPlantMasterKey, setSelectedPlantMasterKey] =
+    useState<string>("");
+  const [selectedCompanyMasterKey, setSelectedCompanyMasterKey] =
+    useState<string>("");
 
   useEffect(() => {
     loadRequests();
@@ -125,23 +127,32 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
     const statusConfig = {
       draft: { label: "Draft", variant: "secondary" as const },
       "pending-secretary": {
-        label: "Pending Secretary",
+        label: "Pending Secretarial",
         variant: "warning" as const,
       },
-      "pending-siva": { label: "Pending Siva", variant: "warning" as const },
-      "pending-raghu": { label: "Pending Raghu", variant: "warning" as const },
-      "pending-manoj": { label: "Pending Manoj", variant: "warning" as const },
+      "pending-siva": {
+        label: "Pending Finance Approver 1",
+        variant: "warning" as const,
+      },
+      "pending-raghu": {
+        label: "Pending Finance Approver 2",
+        variant: "warning" as const,
+      },
+      "pending-manoj": {
+        label: "Pending Finance Approver 3",
+        variant: "warning" as const,
+      },
+
       approved: { label: "Approved", variant: "success" as const },
       rejected: { label: "Rejected", variant: "destructive" as const },
       "sap-updated": { label: "SAP Updated", variant: "success" as const },
       completed: { label: "Completed", variant: "success" as const },
     };
 
-    const config =
-      (statusConfig as any)[status] || {
-        label: status,
-        variant: "secondary" as const,
-      };
+    const config = (statusConfig as any)[status] || {
+      label: status,
+      variant: "secondary" as const,
+    };
     return <Badge variant={config.variant}>{config.label}</Badge>;
   };
 
@@ -151,9 +162,9 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
 
   const canEdit = (request: any) => {
     if (view === "my") {
+      // Allow editing even if rejected (resubmits to first approver on save)
       return (
         request.status !== "approved" &&
-        request.status !== "rejected" &&
         request.status !== "sap-updated" &&
         request.status !== "completed"
       );
@@ -173,8 +184,7 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
   };
 
   // --- Helpers to sanitize master rows into our form fields ---
-  const normalizeKey = (k: string) =>
-    k.toLowerCase().replace(/[\s_-]+/g, "");
+  const normalizeKey = (k: string) => k.toLowerCase().replace(/[\s_-]+/g, "");
 
   const getVal = (row: any, candidates: string[], fallback = "") => {
     if (!row) return fallback;
@@ -246,7 +256,9 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
     const code = getVal(row, ["plantCode", "plant_code", "plant"]);
     const name = getVal(row, ["nameOfPlant", "plantName", "name"]);
     const company = getVal(row, ["companyCode", "company_code"]);
-    return [code, name, company && `(Co: ${company})`].filter(Boolean).join(" - ");
+    return [code, name, company && `(Co: ${company})`]
+      .filter(Boolean)
+      .join(" - ");
   };
 
   const companyMasterDisplay = (row: any) => {
@@ -385,6 +397,229 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
         onValueChange={(v) => setOpenSections(v as string[])}
         className="space-y-4"
       >
+        {/* Company Section */}
+        <AccordionItem value="company" className="border rounded-lg">
+          <AccordionTrigger className="px-4">
+            <div className="flex items-center gap-2">
+              <Building className="h-5 w-5 text-primary" />
+              <span className="text-base font-semibold">
+                {view === "my" ? "Company Code Requests" : "All Company Codes"}
+              </span>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent className="px-4 pb-4">
+            {/* Action row */}
+            <Card className="bg-gradient-card shadow-soft mb-4">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Action</CardTitle>
+                <CardDescription>
+                  Choose request type and proceed
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">Request Type</div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={companyMode === "new" ? "default" : "outline"}
+                      onClick={() => setCompanyMode("new")}
+                    >
+                      New
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={companyMode === "change" ? "default" : "outline"}
+                      onClick={() => setCompanyMode("change")}
+                    >
+                      Change
+                    </Button>
+                  </div>
+                </div>
+
+                {companyMode === "new" ? (
+                  <div className="flex items-end">
+                    <Button
+                      size="sm"
+                      onClick={startNewCompany}
+                      disabled={view !== "my"}
+                      title={
+                        view !== "my" ? "Switch to 'My Requests' to create" : ""
+                      }
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Start New Company Request
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1 md:col-span-2">
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            className="pl-8"
+                            placeholder="Search master companies (code, name, segment)…"
+                            value={companySearch}
+                            onChange={(e) => setCompanySearch(e.target.value)}
+                          />
+                        </div>
+                        <Select
+                          value={selectedCompanyMasterKey}
+                          onValueChange={setSelectedCompanyMasterKey}
+                        >
+                          <SelectTrigger
+                            className="w-[320px]"
+                            disabled={filteredCompanyMasters.length === 0}
+                          >
+                            <SelectValue
+                              placeholder={
+                                filteredCompanyMasters.length
+                                  ? "Select company…"
+                                  : "No master companies"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {filteredCompanyMasters.map((row, idx) => {
+                              const key = companyKeyFor(row, idx);
+                              return (
+                                <SelectItem key={key} value={key}>
+                                  {companyMasterDisplay(row)}
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="flex items-end">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        onClick={startChangeFromCompanyMaster}
+                        disabled={!selectedCompanyMasterKey}
+                      >
+                        <Edit className="h-4 w-4 mr-2" />
+                        Start Change Request
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Listing */}
+            <Card className="bg-background/50 shadow-soft">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Building2 className="h-6 w-6 text-primary" />
+                    <div>
+                      <CardTitle>
+                        {view === "my"
+                          ? "Your Company Requests"
+                          : "Company Codes"}
+                      </CardTitle>
+                      <CardDescription>
+                        {view === "my"
+                          ? "Manage your company code creation requests"
+                          : "View existing company codes and create change requests"}
+                      </CardDescription>
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {companyRequests.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>No company code requests yet</p>
+                    <p className="text-sm">
+                      {view === "my"
+                        ? "Create your first request to get started"
+                        : "No records to display"}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {companyRequests.map((request) => (
+                      <div
+                        key={request.id || request.requestId}
+                        className="flex items-center justify-between p-4 border rounded-lg bg-background/50"
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3">
+                            <h3 className="font-semibold">
+                              {view === "my"
+                                ? request.title
+                                : request.details?.companyCode ||
+                                  "Company Code"}
+                            </h3>
+                            {getStatusBadge(request.status)}
+                            {request.status === "completed" && (
+                              <Badge variant="success">✓ Completed</Badge>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-muted-foreground">
+                            <span>ID: {request.id || request.requestId}</span>
+                            <span>Created by: {request.createdBy}</span>
+                            <span>
+                              Created:{" "}
+                              {new Date(request.createdAt).toLocaleDateString()}
+                            </span>
+                            <span>
+                              Updated:{" "}
+                              {new Date(request.updatedAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          {view === "all" && request.details && (
+                            <div className="mt-2 text-sm text-muted-foreground">
+                              <span>
+                                Name: {request.details.nameOfCompanyCode || "—"}
+                              </span>
+                              {request.details.shareholdingPercentage && (
+                                <span className="ml-4">
+                                  Share:{" "}
+                                  {request.details.shareholdingPercentage}%
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex space-x-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setSelectedRequest(request)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            View
+                          </Button>
+                          {canEdit(request) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setEditingRequest(request);
+                                setIsChangeFlow(view !== "my");
+                                setShowCompanyForm(true);
+                              }}
+                            >
+                              <Edit className="h-4 w-4 mr-1" />
+                              {getEditLabel(request)}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </AccordionContent>
+        </AccordionItem>
+
         {/* Plant Section */}
         <AccordionItem value="plant" className="border rounded-lg">
           <AccordionTrigger className="px-4">
@@ -407,18 +642,22 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
               <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <div className="text-sm font-medium">Request Type</div>
-                  <Select
-                    value={plantMode}
-                    onValueChange={(v) => setPlantMode(v as Mode)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="new">New Request</SelectItem>
-                      <SelectItem value="change">Change Request</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={plantMode === "new" ? "default" : "outline"}
+                      onClick={() => setPlantMode("new")}
+                    >
+                      New
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={plantMode === "change" ? "default" : "outline"}
+                      onClick={() => setPlantMode("change")}
+                    >
+                      Change
+                    </Button>
+                  </div>
                 </div>
 
                 {plantMode === "new" ? (
@@ -427,7 +666,9 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
                       size="sm"
                       onClick={startNewPlant}
                       disabled={view !== "my"}
-                      title={view !== "my" ? "Switch to 'My Requests' to create" : ""}
+                      title={
+                        view !== "my" ? "Switch to 'My Requests' to create" : ""
+                      }
                     >
                       <Plus className="h-4 w-4 mr-2" />
                       Start New Plant Request
@@ -450,8 +691,17 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
                           value={selectedPlantMasterKey}
                           onValueChange={setSelectedPlantMasterKey}
                         >
-                          <SelectTrigger className="w-[320px]" disabled={filteredPlantMasters.length === 0}>
-                            <SelectValue placeholder={filteredPlantMasters.length ? "Select plant…" : "No master plants"} />
+                          <SelectTrigger
+                            className="w-[320px]"
+                            disabled={filteredPlantMasters.length === 0}
+                          >
+                            <SelectValue
+                              placeholder={
+                                filteredPlantMasters.length
+                                  ? "Select plant…"
+                                  : "No master plants"
+                              }
+                            />
                           </SelectTrigger>
                           <SelectContent>
                             {filteredPlantMasters.map((row, idx) => {
@@ -573,213 +823,6 @@ export function RequestorDashboard({ userEmail }: RequestorDashboardProps) {
                                 setEditingRequest(request);
                                 setIsChangeFlow(view !== "my");
                                 setShowPlantForm(true);
-                              }}
-                            >
-                              <Edit className="h-4 w-4 mr-1" />
-                              {getEditLabel(request)}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </AccordionContent>
-        </AccordionItem>
-
-        {/* Company Section */}
-        <AccordionItem value="company" className="border rounded-lg">
-          <AccordionTrigger className="px-4">
-            <div className="flex items-center gap-2">
-              <Building className="h-5 w-5 text-primary" />
-              <span className="text-base font-semibold">
-                {view === "my" ? "Company Code Requests" : "All Company Codes"}
-              </span>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="px-4 pb-4">
-            {/* Action row */}
-            <Card className="bg-gradient-card shadow-soft mb-4">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Action</CardTitle>
-                <CardDescription>
-                  Choose request type and proceed
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-medium">Request Type</div>
-                  <Select
-                    value={companyMode}
-                    onValueChange={(v) => setCompanyMode(v as Mode)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="new">New Request</SelectItem>
-                      <SelectItem value="change">Change Request</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {companyMode === "new" ? (
-                  <div className="flex items-end">
-                    <Button
-                      size="sm"
-                      onClick={startNewCompany}
-                      disabled={view !== "my"}
-                      title={view !== "my" ? "Switch to 'My Requests' to create" : ""}
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Start New Company Request
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="space-y-1 md:col-span-2">
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            className="pl-8"
-                            placeholder="Search master companies (code, name, segment)…"
-                            value={companySearch}
-                            onChange={(e) => setCompanySearch(e.target.value)}
-                          />
-                        </div>
-                        <Select
-                          value={selectedCompanyMasterKey}
-                          onValueChange={setSelectedCompanyMasterKey}
-                        >
-                          <SelectTrigger className="w-[320px]" disabled={filteredCompanyMasters.length === 0}>
-                            <SelectValue placeholder={filteredCompanyMasters.length ? "Select company…" : "No master companies"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {filteredCompanyMasters.map((row, idx) => {
-                              const key = companyKeyFor(row, idx);
-                              return (
-                                <SelectItem key={key} value={key}>
-                                  {companyMasterDisplay(row)}
-                                </SelectItem>
-                              );
-                            })}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="flex items-end">
-                      <Button
-                        size="sm"
-                        variant="default"
-                        onClick={startChangeFromCompanyMaster}
-                        disabled={!selectedCompanyMasterKey}
-                      >
-                        <Edit className="h-4 w-4 mr-2" />
-                        Start Change Request
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Listing */}
-            <Card className="bg-background/50 shadow-soft">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Building2 className="h-6 w-6 text-primary" />
-                    <div>
-                      <CardTitle>
-                        {view === "my"
-                          ? "Your Company Requests"
-                          : "Company Codes"}
-                      </CardTitle>
-                      <CardDescription>
-                        {view === "my"
-                          ? "Manage your company code creation requests"
-                          : "View existing company codes and create change requests"}
-                      </CardDescription>
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {companyRequests.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No company code requests yet</p>
-                    <p className="text-sm">
-                      {view === "my"
-                        ? "Create your first request to get started"
-                        : "No records to display"}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {companyRequests.map((request) => (
-                      <div
-                        key={request.id || request.requestId}
-                        className="flex items-center justify-between p-4 border rounded-lg bg-background/50"
-                      >
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-3">
-                            <h3 className="font-semibold">
-                              {view === "my"
-                                ? request.title
-                                : request.details?.companyCode || "Company Code"}
-                            </h3>
-                            {getStatusBadge(request.status)}
-                            {request.status === "completed" && (
-                              <Badge variant="success">✓ Completed</Badge>
-                            )}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-muted-foreground">
-                            <span>ID: {request.id || request.requestId}</span>
-                            <span>Created by: {request.createdBy}</span>
-                            <span>
-                              Created:{" "}
-                              {new Date(request.createdAt).toLocaleDateString()}
-                            </span>
-                            <span>
-                              Updated:{" "}
-                              {new Date(request.updatedAt).toLocaleDateString()}
-                            </span>
-                          </div>
-                          {view === "all" && request.details && (
-                            <div className="mt-2 text-sm text-muted-foreground">
-                              <span>
-                                Name:{" "}
-                                {request.details.nameOfCompanyCode || "—"}
-                              </span>
-                              {request.details.shareholdingPercentage && (
-                                <span className="ml-4">
-                                  Share: {request.details.shareholdingPercentage}%
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex space-x-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setSelectedRequest(request)}
-                          >
-                            <Eye className="h-4 w-4 mr-1" />
-                            View
-                          </Button>
-                          {canEdit(request) && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setEditingRequest(request);
-                                setIsChangeFlow(view !== "my");
-                                setShowCompanyForm(true);
                               }}
                             >
                               <Edit className="h-4 w-4 mr-1" />

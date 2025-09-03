@@ -45,15 +45,15 @@ export function Navigation({
   };
 
   const getRoleDisplay = (role: string) => {
-    const roleMap = {
-      requestor: "Requestor",
-      it: "IT Team",
-      secretary: "Secretary",
-      finance: "Finance",
-      raghu: "Raghu",
-      siva: "Siva",
-      admin: "Administrator",
+    const roleMap: Record<string, string> = {
+      secretary: "Secretarial",
+      siva: "Finance Approver 1",
+      raghu: "Finance Approver 2",
+      manoj: "Finance Approver 3",
+      admin: "Admin",
+      it: "IT",
     };
+
     return (roleMap as any)[role] || role;
   };
 
@@ -112,9 +112,7 @@ export function Navigation({
           <div className="bg-gradient-primary p-2 rounded-lg">
             <Building className="h-6 w-6 text-white" />
           </div>
-          <span className="text-xl font-bold text-foreground">
-            PEL Workflow
-          </span>
+          <span className="text-xl font-bold text-foreground">CCAS</span>
         </div>
 
         {/* Navigation Items */}
@@ -137,23 +135,6 @@ export function Navigation({
         </div>
 
         <div className="ml-auto flex items-center space-x-4">
-          {/* Notifications */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowNotifications(!showNotifications)}
-            className="relative"
-            aria-label="Notifications"
-          >
-            <Bell className="h-4 w-4" />
-            <Badge
-              variant="destructive"
-              className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs"
-            >
-              3
-            </Badge>
-          </Button>
-
           {/* User Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -190,10 +171,7 @@ export function Navigation({
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <Settings className="mr-2 h-4 w-4" />
-                <span>Settings</span>
-              </DropdownMenuItem>
+
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleLogout}

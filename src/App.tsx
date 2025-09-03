@@ -88,7 +88,7 @@ const App = () => {
                 <div className="h-8 w-8 bg-white rounded animate-spin" />
               </div>
               <h2 className="text-xl font-semibold text-foreground">
-                Loading PEL Workflow
+                Loading CCAS...
               </h2>
               <p className="text-muted-foreground">
                 Initializing application...

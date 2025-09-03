@@ -31,11 +31,15 @@ import {
   CompanyCodeDetails,
   Approval,
   HistoryLog,
+  Attachment,
   getLatestRequestDetails,
   getApprovalsForRequest,
   getHistoryForRequest,
   getAllRequestDetailsVersions,
+  getAttachmentsForRequest,
+  getAttachmentDataUrl,
 } from "@/lib/storage";
+import { Button } from "@/components/ui/button";
 import { compareObjects, CompareResult } from "@/lib/changeTracking";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 
@@ -58,6 +62,9 @@ export function RequestDetailsDialog({
   const [loading, setLoading] = useState(true);
   const [versions, setVersions] = useState<
     Array<PlantCodeDetails | CompanyCodeDetails>
+  >([]);
+  const [attachments, setAttachments] = useState<
+    Array<Omit<Attachment, "fileContent">>
   >([]);
 
   const [documentViewer, setDocumentViewer] = useState<{
@@ -88,18 +95,25 @@ export function RequestDetailsDialog({
   const loadRequestData = async () => {
     setLoading(true);
     try {
-      const [requestDetails, requestApprovals, requestHistory, allVersions] =
-        await Promise.all([
-          getLatestRequestDetails(requestId, request.type),
-          getApprovalsForRequest(requestId),
-          getHistoryForRequest(requestId),
-          getAllRequestDetailsVersions(requestId, request.type),
-        ]);
+      const [
+        requestDetails,
+        requestApprovals,
+        requestHistory,
+        allVersions,
+        requestAttachments,
+      ] = await Promise.all([
+        getLatestRequestDetails(requestId, request.type),
+        getApprovalsForRequest(requestId),
+        getHistoryForRequest(requestId),
+        getAllRequestDetailsVersions(requestId, request.type),
+        getAttachmentsForRequest(requestId),
+      ]);
 
       setDetails(requestDetails);
       setApprovals(requestApprovals);
       setHistory(requestHistory);
       setVersions(allVersions || []);
+      setAttachments(requestAttachments || []);
     } catch (error) {
       console.error("Error loading request data:", error);
       setVersions([]);
@@ -138,25 +152,26 @@ export function RequestDetailsDialog({
     const statusConfig = {
       draft: { label: "Draft", variant: "secondary" as const, icon: FileText },
       "pending-secretary": {
-        label: "Pending Secretary",
-        variant: "warning" as const,
-        icon: Clock,
-      },
-      "pending-finance": {
-        label: "Pending Finance",
-        variant: "warning" as const,
-        icon: Clock,
-      },
-      "pending-raghu": {
-        label: "Pending Raghu",
+        label: "Pending Secretarial",
         variant: "warning" as const,
         icon: Clock,
       },
       "pending-siva": {
-        label: "Pending Siva",
+        label: "Pending Finance Approver 1",
         variant: "warning" as const,
         icon: Clock,
       },
+      "pending-raghu": {
+        label: "Pending Finance Approver 2",
+        variant: "warning" as const,
+        icon: Clock,
+      },
+      "pending-manoj": {
+        label: "Pending Finance Approver 3",
+        variant: "warning" as const,
+        icon: Clock,
+      },
+
       approved: {
         label: "Approved",
         variant: "success" as const,
@@ -203,6 +218,20 @@ export function RequestDetailsDialog({
 
   const isChanged = (field: string) => changedFieldsSet.has(field);
 
+  const openAttachment = async (att: Omit<Attachment, "fileContent">) => {
+    try {
+      const dataUrl = await getAttachmentDataUrl(att.attachmentId);
+      setDocumentViewer({
+        open: true,
+        fileName: att.fileName || att.title || "document",
+        fileContent: dataUrl,
+        fileType: att.fileType,
+      });
+    } catch (e) {
+      console.error("Failed to load attachment:", e);
+    }
+  };
+
   if (loading) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -222,7 +251,7 @@ export function RequestDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-8xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[90vw] max-w-[90vw] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center justify-between">
             <div>
@@ -239,10 +268,11 @@ export function RequestDetailsDialog({
         </DialogHeader>
 
         <Tabs defaultValue="details" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="details">Request Details</TabsTrigger>
             <TabsTrigger value="approvals">Approval History</TabsTrigger>
             <TabsTrigger value="activity">Activity Log</TabsTrigger>
+            <TabsTrigger value="documents">Documents</TabsTrigger>
           </TabsList>
 
           {/* Change Summary when multiple versions exist */}
@@ -330,6 +360,20 @@ export function RequestDetailsDialog({
                           </label>
                           <p className="text-sm">
                             {(details as PlantCodeDetails).nameOfPlant || "—"}
+                          </p>
+                        </div>
+                        <div
+                          className={`space-y-1 rounded-lg p-2 border ${
+                            isChanged("gstNumber")
+                              ? "bg-amber-50 border-amber-300"
+                              : "border-transparent"
+                          }`}
+                        >
+                          <label className="text-sm font-medium text-muted-foreground">
+                            GST Number
+                          </label>
+                          <p className="text-sm">
+                            {(details as PlantCodeDetails).gstNumber || "—"}
                           </p>
                         </div>
                         <div
@@ -607,6 +651,20 @@ export function RequestDetailsDialog({
                         </div>
                         <div
                           className={`space-y-1 rounded-lg p-2 border ${
+                            isChanged("gstNumber")
+                              ? "bg-amber-50 border-amber-300"
+                              : "border-transparent"
+                          }`}
+                        >
+                          <label className="text-sm font-medium text-muted-foreground">
+                            GST Number
+                          </label>
+                          <p className="text-sm">
+                            {(details as CompanyCodeDetails).gstNumber || "—"}
+                          </p>
+                        </div>
+                        <div
+                          className={`space-y-1 rounded-lg p-2 border ${
                             isChanged("gstCertificate")
                               ? "bg-amber-50 border-amber-300"
                               : "border-transparent"
@@ -618,6 +676,20 @@ export function RequestDetailsDialog({
                           <p className="text-sm break-all">
                             {(details as CompanyCodeDetails).gstCertificate ||
                               "—"}
+                          </p>
+                        </div>
+                        <div
+                          className={`space-y-1 rounded-lg p-2 border ${
+                            isChanged("cinNumber")
+                              ? "bg-amber-50 border-amber-300"
+                              : "border-transparent"
+                          }`}
+                        >
+                          <label className="text-sm font-medium text-muted-foreground">
+                            CIN Number
+                          </label>
+                          <p className="text-sm">
+                            {(details as CompanyCodeDetails).cinNumber || "—"}
                           </p>
                         </div>
                         <div
@@ -634,6 +706,21 @@ export function RequestDetailsDialog({
                             {(details as CompanyCodeDetails).cin || "—"}
                           </p>
                         </div>
+                        <div
+                          className={`space-y-1 rounded-lg p-2 border ${
+                            isChanged("panNumber")
+                              ? "bg-amber-50 border-amber-300"
+                              : "border-transparent"
+                          }`}
+                        >
+                          <label className="text-sm font-medium text-muted-foreground">
+                            PAN Number
+                          </label>
+                          <p className="text-sm">
+                            {(details as CompanyCodeDetails).panNumber || "—"}
+                          </p>
+                        </div>
+
                         <div
                           className={`space-y-1 rounded-lg p-2 border ${
                             isChanged("pan")
@@ -784,6 +871,48 @@ export function RequestDetailsDialog({
                   </div>
                 ) : (
                   <p className="text-muted-foreground">No activity logged</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="documents" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Documents</CardTitle>
+                <CardDescription>
+                  Files attached to this request
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {attachments.length > 0 ? (
+                  <div className="space-y-3">
+                    {attachments.map((att) => (
+                      <div
+                        key={att.attachmentId}
+                        className="flex items-center justify-between p-3 border rounded-lg bg-background/50"
+                      >
+                        <div className="flex items-center gap-3">
+                          <FileText className="h-5 w-5 text-primary" />
+                          <div>
+                            <div className="font-medium">
+                              {att.title || att.fileName}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {att.fileName} • v{att.version} •{" "}
+                              {new Date(att.uploadedAt).toLocaleString()} •{" "}
+                              {att.fileType}
+                            </div>
+                          </div>
+                        </div>
+                        <Button size="sm" onClick={() => openAttachment(att)}>
+                          View
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No documents uploaded</p>
                 )}
               </CardContent>
             </Card>
