@@ -327,9 +327,9 @@ app.use(express.static(DIST_DIR));
 // 2) sapapp (for your application data)
 
 const COMMON_DB = {
-  user: "SPOT_USER",
-  password: "Marvik#72@",
-  server: "10.0.40.10",
+  user: "PEL_DB",
+  password: "Pel@0184",
+  server: "10.0.50.17",
   port: 1433,
   options: {
     trustServerCertificate: true,
